@@ -1,0 +1,19 @@
+## Interface: 16001
+## Title: P13Tweaks
+## Notes: Personal quality-of-life tweaks. Type /p13 to open options.
+## Author: bryan
+## Version: 0.1.0
+## SavedVariables: P13TweaksDB
+## OptionalDeps: QuestieDB
+
+Core.lua
+Features\MapCircle.lua
+Features\MapSeamless.lua
+Features\MapMemory.lua
+Features\MapMiddleClick.lua
+Features\MapCenterKey.lua
+Features\InteractIcons.lua
+Features\PriorityTarget.lua
+Features\RangeBeep.lua
+Features\KillsToLevel.lua
+Options.lua

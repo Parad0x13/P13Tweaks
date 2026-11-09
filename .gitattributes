@@ -1,0 +1,2 @@
+# Textures are binary: never touch line endings or try to diff them.
+*.tga binary

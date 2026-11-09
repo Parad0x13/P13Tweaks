@@ -1,0 +1,10 @@
+# Editor / OS clutter
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+
+# Python bytecode from tools/
+__pycache__/
+*.pyc

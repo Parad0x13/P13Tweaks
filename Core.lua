@@ -1,0 +1,74 @@
+-- P13Tweaks: core (saved settings, option registry, slash commands)
+local ADDON_NAME, ns = ...
+
+ns.name = "P13Tweaks"
+ns.options = {}   -- ordered list of option definitions
+
+-- Print a message with the addon's colored prefix.
+function ns:Print(msg)
+    DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99" .. ns.name .. "|r: " .. tostring(msg))
+end
+
+-- Register an option. Feature files call this to show up in the options window.
+--   key      unique saved-variable key
+--   type     "toggle" (more types later)
+--   label    text shown in the window
+--   tooltip  optional hover text
+--   default  default value
+--   onChange optional function(value) called when the user changes it
+function ns:RegisterOption(def)
+    assert(def.key and def.type and def.label, "option needs key, type and label")
+    table.insert(self.options, def)
+end
+
+function ns:Get(key)
+    return P13TweaksDB[key]
+end
+
+function ns:Set(key, value)
+    P13TweaksDB[key] = value
+    for _, def in ipairs(self.options) do
+        if def.key == key and def.onChange then
+            def.onChange(value)
+        end
+    end
+end
+
+local events = CreateFrame("Frame")
+events:RegisterEvent("ADDON_LOADED")
+events:SetScript("OnEvent", function(self, event, arg1)
+    if arg1 == ADDON_NAME then
+        P13TweaksDB = P13TweaksDB or {}
+        P13TweaksDB.welcomeMessage, P13TweaksDB.mapExtraZoom = nil, nil  -- removed options
+        P13TweaksDB.herbArrow, P13TweaksDB.herbArrowPos, P13TweaksDB.herbs = nil, nil, nil  -- removed herb arrow
+        P13TweaksDB.targetMarker, P13TweaksDB.targetMarkerIcon = nil, nil  -- removed target arrow
+        for _, def in ipairs(ns.options) do
+            if P13TweaksDB[def.key] == nil then
+                P13TweaksDB[def.key] = def.default
+            end
+        end
+        ns:CreateOptionsUI()
+        self:UnregisterEvent("ADDON_LOADED")
+    end
+end)
+
+-- Extra "/p13 <word>" commands that features can add. Plain /p13 opens the options.
+ns.commands = {}
+function ns:RegisterCommand(word, help, func)
+    self.commands[word:lower()] = { help = help, func = func }
+end
+
+SLASH_P13TWEAKS1 = "/p13"
+SLASH_P13TWEAKS2 = "/p13tweaks"
+SlashCmdList["P13TWEAKS"] = function(msg)
+    local word, rest = strtrim(msg or ""):match("^(%S*)%s*(.-)$")
+    word = (word or ""):lower()
+    if word == "" then
+        ns:ToggleOptions()
+    elseif ns.commands[word] then
+        ns.commands[word].func(rest)
+    else
+        ns:Print("commands: /p13 (options)")
+        for w, c in pairs(ns.commands) do ns:Print("  /p13 " .. w .. " - " .. c.help) end
+    end
+end
