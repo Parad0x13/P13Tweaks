@@ -46,6 +46,37 @@ end
 
 -- Class trainers are titled "<Class> Trainer"; they're stored under this key.
 local CLASS_KEY = "CLASS"
+-- Weapon masters (titled "Weapon Master") teach weapon skills; stored under this key.
+-- Weapon skills were removed in Cataclysm, so this is only offered on older clients.
+local WEAPON_KEY = "WEAPON"
+-- General goods vendors (titled "General Goods" / "General Supplies"); stored under this key.
+local GOODS_KEY = "GOODS"
+local HAS_WEAPON_SKILLS = (select(4, GetBuildInfo()) or 0) < 40000
+
+-- Weapon skills in menu order.
+local WEAPONS = {
+    "Bows", "Crossbows", "Daggers", "Fist Weapons", "Guns",
+    "One-Handed Axes", "One-Handed Maces", "One-Handed Swords", "Polearms", "Staves",
+    "Thrown", "Two-Handed Axes", "Two-Handed Maces", "Two-Handed Swords",
+}
+-- Which weapon master teaches what (WoW Forever / Classic; source: Warcraft Tavern's
+-- Forever weapon trainer guide, matches warcraft.wiki.gg). Matched on the NPC's name.
+local WEAPON_TEACHERS = {
+    ["Woo Ping"]          = { "Crossbows", "Daggers", "One-Handed Swords", "Polearms", "Staves", "Two-Handed Swords" },
+    ["Bixi Wobblebonk"]   = { "Crossbows", "Daggers", "Thrown" },
+    ["Buliwyf Stonehand"] = { "Fist Weapons", "Guns", "One-Handed Axes", "One-Handed Maces", "Two-Handed Axes", "Two-Handed Maces" },
+    ["Ilyenia Moonfire"]  = { "Bows", "Daggers", "Fist Weapons", "Staves", "Thrown" },
+    ["Sayoc"]             = { "Bows", "Daggers", "Fist Weapons", "One-Handed Axes", "Staves", "Thrown", "Two-Handed Axes" },
+    ["Hanashi"]           = { "Bows", "One-Handed Axes", "Staves", "Thrown", "Two-Handed Axes" },
+    ["Ansekhwa"]          = { "Guns", "One-Handed Maces", "Staves", "Two-Handed Maces" },
+    ["Archibald"]         = { "Crossbows", "Daggers", "One-Handed Swords", "Polearms", "Two-Handed Swords" },
+}
+local function Teaches(npcName, weapon)
+    for _, w in ipairs(WEAPON_TEACHERS[npcName] or {}) do
+        if w == weapon then return true end
+    end
+    return false
+end
 local function ClassWord()
     local _, token = UnitClass("player")
     return token == "DEATHKNIGHT" and "death knight" or (token or ""):lower()
@@ -87,6 +118,20 @@ local function BuildTrainers()
     local classTitle = ClassWord() .. " trainer"
     for _, id in ipairs(lib.Npc.GetAllIds()) do
         local okF, flags = pcall(Get, id, "npcFlags")
+        -- General goods vendors (not trainers): matched on their title alone.
+        local _, gsub = pcall(Get, id, "subName")
+        if type(gsub) == "string" then
+            local lg = gsub:lower()
+            if lg:find("general goods", 1, true) or lg:find("general supplies", 1, true) then
+                local _, friendly = pcall(Get, id, "friendlyToFaction")
+                local _, spawns = pcall(Get, id, "spawns")
+                local _, name = pcall(Get, id, "name")
+                if type(friendly) == "string" and friendly:find(myFaction, 1, true) and type(spawns) == "table" then
+                    trainers[GOODS_KEY] = trainers[GOODS_KEY] or {}
+                    table.insert(trainers[GOODS_KEY], { id = id, name = name or "?", sub = gsub, spawns = spawns })
+                end
+            end
+        end
         if okF and type(flags) == "number" and bit.band(flags, TRAINER_FLAG) ~= 0 then
             local _, sub = pcall(Get, id, "subName")
             local _, friendly = pcall(Get, id, "friendlyToFaction")
@@ -98,6 +143,23 @@ local function BuildTrainers()
                     if type(spawns) == "table" then
                         trainers[CLASS_KEY] = trainers[CLASS_KEY] or {}
                         table.insert(trainers[CLASS_KEY], { id = id, name = name or "?", sub = sub, spawns = spawns })
+                    end
+                end
+                if lsub:find("weapon master", 1, true) then
+                    local _, spawns = pcall(Get, id, "spawns")
+                    local _, name = pcall(Get, id, "name")
+                    if type(spawns) == "table" then
+                        local t = { id = id, name = name or "?", sub = sub, spawns = spawns }
+                        trainers[WEAPON_KEY] = trainers[WEAPON_KEY] or {}
+                        table.insert(trainers[WEAPON_KEY], t)
+                        -- Also file them under each weapon they teach ("WEAPON:Daggers"...).
+                        for _, w in ipairs(WEAPONS) do
+                            if Teaches(t.name, w) then
+                                local key = WEAPON_KEY .. ":" .. w
+                                trainers[key] = trainers[key] or {}
+                                table.insert(trainers[key], t)
+                            end
+                        end
                     end
                 end
                 for skillLine, words in pairs(PROF_WORDS) do
@@ -351,11 +413,50 @@ local function GuideToClassTrainer()
     GuideTo({ name = className, skillLine = CLASS_KEY })   -- no cap: any class trainer will do
 end
 
+-- weapon = one of WEAPONS for a master who teaches it, or nil for the closest one of any kind.
+local function GuideToWeaponMaster(weapon)
+    if not HAS_WEAPON_SKILLS then ns:Print("This version of the game has no weapon masters."); return end
+    if weapon then
+        GuideTo({ name = weapon, skillLine = WEAPON_KEY .. ":" .. weapon })
+    else
+        GuideTo({ name = "Weapon Master", skillLine = WEAPON_KEY })
+        ns:Print("|cffffd200Each weapon master teaches only some weapons - pick a weapon in the menu (or /p13 weapon <name>) to find one who teaches it.|r")
+    end
+end
+
+local function GuideToGeneralGoods()
+    GuideTo({ name = "General Goods", skillLine = GOODS_KEY })
+end
+
+-- Weapon skills you already have, from the character's skill list (English names).
+local function KnownWeapons()
+    local known = {}
+    if GetNumSkillLines and GetSkillLineInfo then
+        for i = 1, GetNumSkillLines() do
+            local name, isHeader = GetSkillLineInfo(i)
+            if name and not isHeader then known[name] = true end
+        end
+    end
+    return known
+end
+
 if Menu and Menu.ModifyMenu then
     Menu.ModifyMenu("MENU_UNIT_SELF", function(_, root)
         if not ns:Get("classTrainerMenu") then return end
         root:CreateDivider()
         root:CreateButton("Mark closest Class Trainer", GuideToClassTrainer)
+        root:CreateButton("Mark closest General Goods", GuideToGeneralGoods)
+        if HAS_WEAPON_SKILLS then
+            -- Submenu: one entry per weapon; ones you already know are greyed and marked.
+            local sub = root:CreateButton("Mark closest Weapon Master")
+            sub:CreateButton("Any weapon master", function() GuideToWeaponMaster() end)
+            sub:CreateDivider()
+            local known = KnownWeapons()
+            for _, w in ipairs(WEAPONS) do
+                local label = known[w] and ("|cff888888" .. w .. " (known)|r") or w
+                sub:CreateButton(label, function() GuideToWeaponMaster(w) end)
+            end
+        end
         -- Read fresh each time the menu opens, so new/dropped professions show up.
         -- GuideTo uses the profession's cap to pick a trainer who teaches the next rank.
         for _, p in ipairs(Professions()) do
@@ -384,11 +485,20 @@ ns:RegisterOption({
     key = "classTrainerMenu",
     type = "toggle",
     label = "\"Mark closest Trainer\" items when right-clicking your portrait",
-    tooltip = "Adds \"Mark closest Class Trainer\" and a \"Mark closest <Profession> Trainer\" for each of your professions to the menu you get by right-clicking your own portrait. Each puts a waypoint on the nearest matching trainer (needs QuestieDB). For a profession it looks for a trainer who teaches your next rank.",
+    tooltip = "Adds \"Mark closest Class Trainer\", \"Mark closest General Goods\", \"Mark closest Weapon Master\" (with a choice of weapon; only in games that still have weapon skills) and a \"Mark closest <Profession> Trainer\" for each of your professions to the menu you get by right-clicking your own portrait. Each puts a waypoint on the nearest matching trainer (needs QuestieDB). For a profession it looks for a trainer who teaches your next rank.",
     default = true,
 })
 
 ns:RegisterCommand("trainer", "waypoint to the nearest trainer for your class", GuideToClassTrainer)
+ns:RegisterCommand("goods", "waypoint to the nearest General Goods vendor", GuideToGeneralGoods)
+ns:RegisterCommand("weapon","waypoint to the nearest weapon master; /p13 weapon <weapon> (e.g. daggers, 2h swords) = nearest one who teaches it", function(arg)
+    arg = strtrim(arg or ""):lower():gsub("^1h ", "one-handed "):gsub("^2h ", "two-handed ")
+    if arg == "" then GuideToWeaponMaster(); return end
+    for _, w in ipairs(WEAPONS) do
+        if w:lower():find(arg, 1, true) then GuideToWeaponMaster(w); return end
+    end
+    ns:Print("Unknown weapon \"" .. arg .. "\". Choices: " .. table.concat(WEAPONS, ", "))
+end)
 
 ns:RegisterCommand("prof", "list your professions and caps; /p13 prof <name> = waypoint to its nearest trainer; /p13 prof reset = show dismissed notices again", function(arg)
     arg = strtrim(arg or ""):lower()

@@ -32,7 +32,7 @@ Personal quality-of-life addon for **WoW Forever** (`P13Tweaks.toc`, interface 1
 | MapMiddleClick + MapCenterKey | middle-click the map to centre on yourself | |
 | InteractIcons | floating interact icons on nearby objects (soft-target CVars) | |
 | RangeBeep | beep when target is **X yards** (typed; snapped to the nearest checkable range) | `range`, `dot` |
-| ProfCap | notice when a profession is at/near its cap; click a row = waypoint to nearest trainer; **right-click your own portrait → "Mark closest Class Trainer"** | `prof [name\|reset]`, `trainer` |
+| ProfCap | notice when a profession is at/near its cap; click a row = waypoint to nearest trainer; **right-click your own portrait → "Mark closest Class Trainer" / "General Goods" / "Weapon Master" (submenu per weapon; hardcoded `WEAPON_TEACHERS` by NPC name; pre-Cata clients only)** | `prof [name\|reset]`, `trainer`, `goods`, `weapon [weapon]` |
 | FishKey | one key (default `` ` ``) casts Fishing, then becomes Interact to reel in; optional louder splash with SFX % slider | `fish` |
 | KillsToLevel | "N more" popup under the character after an XP kill + per-mob kill tally line; kill counts window with per-mob / all clear | `kills`, `killtest`, `killmove` |
 | ChatFade | chat hidden until hovered; optional: show for N seconds when a message arrives | `chat` |
