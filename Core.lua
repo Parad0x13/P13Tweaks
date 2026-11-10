@@ -11,11 +11,14 @@ end
 
 -- Register an option. Feature files call this to show up in the options window.
 --   key      unique saved-variable key
---   type     "toggle" (more types later)
---   label    text shown in the window
+--   type     "toggle", "toggleNumber", "text" or "info" (see Options.lua)
+--   label    text shown in the window (tooltip title for toggleNumber)
 --   tooltip  optional hover text
 --   default  default value
 --   onChange optional function(value) called when the user changes it
+--   numberKey / numberDefault  toggleNumber / toggleSlider: the second saved value
+--   inputKey / inputDefault    toggleText only: the second saved value
+--            (changing either also calls onChange)
 function ns:RegisterOption(def)
     assert(def.key and def.type and def.label, "option needs key, type and label")
     table.insert(self.options, def)
@@ -28,7 +31,7 @@ end
 function ns:Set(key, value)
     P13TweaksDB[key] = value
     for _, def in ipairs(self.options) do
-        if def.key == key and def.onChange then
+        if (def.key == key or def.numberKey == key or def.inputKey == key) and def.onChange then
             def.onChange(value)
         end
     end
@@ -42,9 +45,17 @@ events:SetScript("OnEvent", function(self, event, arg1)
         P13TweaksDB.welcomeMessage, P13TweaksDB.mapExtraZoom = nil, nil  -- removed options
         P13TweaksDB.herbArrow, P13TweaksDB.herbArrowPos, P13TweaksDB.herbs = nil, nil, nil  -- removed herb arrow
         P13TweaksDB.targetMarker, P13TweaksDB.targetMarkerIcon = nil, nil  -- removed target arrow
+        P13TweaksDB.priorityTarget, P13TweaksDB.priorityTargetQuestInfo = nil, nil  -- removed quest target key
+        P13TweaksDB.priorityTargetNames, P13TweaksDB.priorityTargetQuests = nil, nil
         for _, def in ipairs(ns.options) do
             if P13TweaksDB[def.key] == nil then
                 P13TweaksDB[def.key] = def.default
+            end
+            if def.numberKey and P13TweaksDB[def.numberKey] == nil then
+                P13TweaksDB[def.numberKey] = def.numberDefault
+            end
+            if def.inputKey and P13TweaksDB[def.inputKey] == nil then
+                P13TweaksDB[def.inputKey] = def.inputDefault
             end
         end
         ns:CreateOptionsUI()

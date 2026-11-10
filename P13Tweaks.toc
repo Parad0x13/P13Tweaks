@@ -13,7 +13,10 @@ Features\MapMemory.lua
 Features\MapMiddleClick.lua
 Features\MapCenterKey.lua
 Features\InteractIcons.lua
-Features\PriorityTarget.lua
 Features\RangeBeep.lua
+Features\ProfCap.lua
+Features\FishKey.lua
 Features\KillsToLevel.lua
+Features\ChatFade.lua
+Features\ChatScroll.lua
 Options.lua

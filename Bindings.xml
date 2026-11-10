@@ -1,4 +1,0 @@
-<Bindings>
-	<!-- Priority target key (see Features/PriorityTarget.lua) -->
-	<Binding name="CLICK P13TweaksPriorityTarget:LeftButton" category="P13Tweaks"></Binding>
-</Bindings>

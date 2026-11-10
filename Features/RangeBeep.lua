@@ -1,28 +1,93 @@
--- P13Tweaks feature: beep when a hostile target you're approaching comes within ~30 yards.
--- The game doesn't give addons a mob's exact distance, only "is it in range of X?".
--- We ask using items with a 30 yd range (you don't need to own them), and fall back to
--- the built-in 28 yd "follow" range check if the item check isn't available.
+-- P13Tweaks feature: beep when a hostile target you're approaching comes within X yards
+-- (X is typed into the options window, default 30).
+-- The game doesn't give addons a mob's exact distance, only "is it in range of this item?".
+-- So we ask with items of known range (you don't need to own them). That only works at
+-- the distances in RANGE_ITEMS: a typed X is snapped to the nearest one. 28 yd uses the
+-- built-in "follow" range check instead of an item.
 local ADDON_NAME, ns = ...
 
-local RANGE_ITEMS = { 835, 7734 }   -- Large Rope Net, Six Demon Bag: both 30 yd on enemies
+-- yards -> enemy-range items (list from LibRangeCheck). Not every item may exist on every
+-- client; if none at the chosen distance answer, the nearest distance that does is used
+-- and /p13 range says so.
+local RANGE_ITEMS = {
+    [5]   = { 8149, 136605, 63427 },  -- Voodoo Charm, Solendra's Compassion, Worgsaw
+    [7]   = { 61323 },                -- Ruby Seeds
+    [8]   = { 34368, 33278 },         -- Attuned Crystal Cores, Burning Torch
+    [10]  = { 32321 },                -- Sparrowhawk Net
+    [15]  = { 33069 },                -- Sturdy Rope
+    [20]  = { 10645 },                -- Gnomish Death Ray
+    [25]  = { 24268, 41509 },         -- Netherweave Net, Frostweave Net
+    [28]  = "follow",                 -- CheckInteractDistance index 4
+    [30]  = { 835, 7734, 34191 },     -- Large Rope Net, Six Demon Bag, Handful of Snowflakes
+    [35]  = { 18904 },                -- Zorbin's Ultra-Shrinker
+    [40]  = { 28767 },                -- The Decapitator
+    [45]  = { 23836 },                -- Goblin Rocket Launcher
+    [50]  = { 116139 },               -- Haunting Memento
+    [55]  = { 74637 },                -- Kiryn's Poison Vial
+    [60]  = { 32825, 37887 },         -- Soul Cannon, Seeds of Nature's Wrath
+    [70]  = { 41265 },                -- Eyesore Blaster
+    [80]  = { 35278 },                -- Reinforced Net
+    [90]  = { 133925 },               -- Fel Lash
+    [100] = { 33119 },                -- Malister's Frost Wand
+}
+local DISTANCES = {}
+for yd in pairs(RANGE_ITEMS) do table.insert(DISTANCES, yd) end
+table.sort(DISTANCES)
+
+local DEFAULT_YARDS = 30
 local CHECK_EVERY = 0.1             -- seconds between range checks
 local COOLDOWN    = 2               -- don't beep again within this many seconds
 local SOUND       = (SOUNDKIT and SOUNDKIT.RAID_WARNING) or 8959   -- loud raid-warning horn
 
 local IsItemInRange = (C_Item and C_Item.IsItemInRange) or _G.IsItemInRange
 
--- Returns true = within ~30 yd, false = farther, nil = can't tell right now,
--- plus a short description of which check answered (for /p13 range).
-local function InRange()
-    if IsItemInRange then
-        for _, id in ipairs(RANGE_ITEMS) do
+-- Nearest distance we can check to what was typed (ties go to the shorter one).
+local function Snap(n)
+    local best
+    for _, yd in ipairs(DISTANCES) do
+        if not best or math.abs(yd - n) < math.abs(best - n) then best = yd end
+    end
+    return best
+end
+
+local function Yards() return ns:Get("rangeBeepYards") or DEFAULT_YARDS end
+
+-- Distances to try, the chosen one first, then the rest nearest-first. Rebuilt on change.
+local tryOrder = {}
+local function BuildTryOrder()
+    local want = Yards()
+    wipe(tryOrder)
+    for _, yd in ipairs(DISTANCES) do table.insert(tryOrder, yd) end
+    table.sort(tryOrder, function(a, b)
+        local da, db = math.abs(a - want), math.abs(b - want)
+        if da ~= db then return da < db end
+        return a < b
+    end)
+end
+
+local function CheckAt(yd)
+    local how = RANGE_ITEMS[yd]
+    if how == "follow" then
+        if CheckInteractDistance then
+            local ok, r = pcall(CheckInteractDistance, "target", 4)
+            if ok and r ~= nil then return r and true or false, "follow range check" end
+        end
+    elseif IsItemInRange then
+        for _, id in ipairs(how) do
             local ok, r = pcall(IsItemInRange, id, "target")
             if ok and r ~= nil then return r and true or false, "item " .. id end
         end
     end
-    if CheckInteractDistance then
-        local ok, r = pcall(CheckInteractDistance, "target", 4)  -- 4 = follow range, ~28 yd
-        if ok and r ~= nil then return r and true or false, "follow range (28 yd)" end
+    return nil
+end
+
+-- Returns true = within range, false = farther, nil = can't tell right now,
+-- plus which check answered and the distance it really checked (for /p13 range).
+local function InRange()
+    if #tryOrder == 0 then BuildTryOrder() end
+    for _, yd in ipairs(tryOrder) do
+        local r, how = CheckAt(yd)
+        if r ~= nil then return r, how, yd end
     end
     return nil, "no range check worked"
 end
@@ -35,8 +100,8 @@ local function ValidTarget()
     return UnitExists("target") and UnitCanAttack("player", "target") and not UnitIsDead("target")
 end
 
--- Range dot over your own character. It pops in only when your target crosses the 30 yd line
--- (green = just came within 30 yd, red = just went beyond), then fades away.
+-- Range dot over your own character. It pops in only when your target crosses the beep
+-- range line (green = just came within range, red = just went beyond), then fades away.
 -- Addons can't read where your character is on screen, but the camera keeps you near the
 -- middle, so the dot sits just above centre. Type /p13 dot to show it and drag it into place.
 local DOT_COLORS = { [true] = { 0.2, 1.0, 0.2 }, [false] = { 1.0, 0.2, 0.2 } }
@@ -144,7 +209,7 @@ ns:RegisterCommand("dot", "show the range crosshair so you can drag it over your
 end)
 
 local armed, lastBeep, since = false, 0, 0
-local lastRange                        -- target's last known side of the 30 yd line
+local lastRange                        -- target's last known side of the beep range line
 local frame = CreateFrame("Frame")
 
 frame:SetScript("OnUpdate", function(self, dt)
@@ -172,15 +237,27 @@ end)
 
 local function Update()
     armed, lastRange = false, nil
+    BuildTryOrder()
     if ns:Get("rangeBeep") or ns:Get("rangeDot") then frame:Show() else frame:Hide() end
     if not ns:Get("rangeDot") and not moving then anim:Stop(); dot:Hide() end
 end
 
 ns:RegisterOption({
     key = "rangeBeep",
-    type = "toggle",
-    label = "Beep when target is within 30 yards",
-    tooltip = "If you target an enemy that's more than 30 yards away, a beep plays when you get within 30 yards of it. Plays again if it leaves range and comes back.",
+    type = "toggleNumber",
+    label = "Beep when target is within range",
+    before = "Beep when target is within",
+    after = "yards",
+    numberKey = "rangeBeepYards",
+    numberDefault = DEFAULT_YARDS,
+    snap = function(n)
+        local yd = Snap(n)
+        if yd ~= n then
+            ns:Print(("The game can only check certain distances - using %d yards (nearest to %d)."):format(yd, n))
+        end
+        return yd
+    end,
+    tooltip = "Type a distance in the box. If you target an enemy that's farther away than that, a beep plays when you get within that distance of it. Plays again if it leaves range and comes back.\n\nThe game only lets addons check certain distances (5, 7, 8, 10, 15, 20, 25, 28, 30, 35, 40, 45, 50, 55, 60, 70, 80, 90, 100), so what you type is rounded to the nearest one.",
     default = true,
     onChange = Update,
 })
@@ -189,17 +266,19 @@ ns:RegisterOption({
     key = "rangeDot",
     type = "toggle",
     label = "Range crosshair over my character",
-    tooltip = "A crosshair pops up above your character for a moment when your target crosses 30 yards: green when it comes within 30 yards, red when it goes beyond. Type /p13 dot to drag it into place over your head.",
+    tooltip = "A crosshair pops up above your character for a moment when your target crosses your beep range: green when it comes within range, red when it goes beyond. Type /p13 dot to drag it into place over your head.",
     default = true,
     onChange = Update,
 })
 
-ns:RegisterCommand("range", "play the beep and show whether your target is within 30 yards", function()
+ns:RegisterCommand("range", "play the beep and show whether your target is within your beep range", function()
     Beep()
     ns:Print("Played the beep (raid warning sound, Master channel).")
     if not UnitExists("target") then ns:Print("No target."); return end
-    local r, how = InRange()
-    ns:Print("Target is " .. (r == true and "within 30 yd" or r == false and "farther than 30 yd" or "unknown range")
+    local r, how, yd = InRange()
+    local want = Yards()
+    local dist = yd and (yd .. " yd" .. (yd ~= want and (" - |cffffd200" .. want .. " yd didn't work on this client|r") or "")) or (want .. " yd")
+    ns:Print("Target is " .. (r == true and "within " or r == false and "farther than " or "unknown range vs ") .. dist
         .. " - " .. how .. ". Enemy: " .. tostring(UnitCanAttack("player", "target") and true or false)
         .. ", option on: " .. tostring(ns:Get("rangeBeep") and true or false))
 end)
@@ -209,9 +288,13 @@ frame:RegisterEvent("PLAYER_TARGET_CHANGED")
 frame:SetScript("OnEvent", function(self, event)
     if event == "PLAYER_LOGIN" then
         -- Range checks by item ID need the item's info loaded first.
-        for _, id in ipairs(RANGE_ITEMS) do
-            if C_Item and C_Item.RequestLoadItemDataByID then C_Item.RequestLoadItemDataByID(id)
-            elseif GetItemInfo then GetItemInfo(id) end
+        for _, how in pairs(RANGE_ITEMS) do
+            if type(how) == "table" then
+                for _, id in ipairs(how) do
+                    if C_Item and C_Item.RequestLoadItemDataByID then pcall(C_Item.RequestLoadItemDataByID, id)
+                    elseif GetItemInfo then GetItemInfo(id) end
+                end
+            end
         end
         P13TweaksDB.rangeRing, P13TweaksDB.rangeRingPos = nil, nil  -- removed option
         PlaceDot()
