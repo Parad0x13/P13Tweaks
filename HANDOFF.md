@@ -32,7 +32,7 @@ Personal quality-of-life addon for **WoW Forever** (`P13Tweaks.toc`, interface 1
 | MapMiddleClick + MapCenterKey | middle-click the map to centre on yourself | |
 | InteractIcons | floating interact icons on nearby objects (soft-target CVars) | |
 | RangeBeep | beep when target is **X yards** (typed; snapped to the nearest checkable range) | `range`, `dot` |
-| ProfCap | notice when a profession is at/near its cap; click a row = waypoint to nearest trainer; **right-click your own portrait → "Mark closest Class Trainer" / "General Goods" / "Weapon Master" (submenu per weapon; hardcoded `WEAPON_TEACHERS` by NPC name; pre-Cata clients only)** | `prof [name\|reset]`, `trainer`, `goods`, `weapon [weapon]` |
+| ProfCap | notice when a profession is at/near its cap; click a row = waypoint to nearest trainer; **right-click your own portrait → "Mark closest Class Trainer" / "General Goods" / "Weapon Master" (submenu per weapon; hardcoded `WEAPON_TEACHERS` by NPC name; pre-Cata clients only) / one "Mark closest <Profession> Trainer" per profession (icon, rank-aware via `GuideTo(p)`, list rebuilt each time the menu opens; only professions in `PROF_WORDS`)** | `prof [name\|reset]`, `trainer`, `goods`, `weapon [weapon]` |
 | FishKey | one key (default `` ` ``) casts Fishing, then becomes Interact to reel in; optional louder splash with SFX % slider | `fish` |
 | KillsToLevel | "N more" popup under the character after an XP kill + per-mob kill tally line; kill counts window with per-mob / all clear | `kills`, `killtest`, `killmove` |
 | ChatFade | chat hidden until hovered; optional: show for N seconds when a message arrives | `chat` |
@@ -63,16 +63,7 @@ Personal quality-of-life addon for **WoW Forever** (`P13Tweaks.toc`, interface 1
 4. Offered: filter which chat messages bring chat back; a "line out" timer; show the game's own kill
    statistic (`GetStatistic`, only if Forever has achievements) in the kill window.
 
-## Commit (PowerShell) – only when the user asks
-```powershell
-cd "C:\Users\bryan\Desktop\P13Tweaks"
-git add -A
-git commit -m "Profession cap notice, one-key fishing, kill tally, chat and range options" `
-  -m "- RangeBeep: typed yard distance
-- ProfCap: cap notice, nearest trainer waypoints, Mark closest Class Trainer on own portrait menu
-- FishKey: one key cast + reel in, louder splash with SFX % slider
-- KillsToLevel: per-mob kill tally, kill counts window, longer popup
-- ChatFade: show chat when a message arrives; ChatScroll added
-- Removed quest target key" `
-  -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-```
+## Git
+Clean and pushed as of `7e80d7d` ("Add weapon master and General Goods waypoints", which also holds the
+per-profession trainer menu items). Commit/push only when the user asks; end messages with
+`Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
