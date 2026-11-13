@@ -15,6 +15,8 @@ Features\MapCenterKey.lua
 Features\InteractIcons.lua
 Features\RangeBeep.lua
 Features\ProfCap.lua
+Features\MinimapTownsfolk.lua
+Features\FlightPoints.lua
 Features\FishKey.lua
 Features\KillsToLevel.lua
 Features\ChatFade.lua

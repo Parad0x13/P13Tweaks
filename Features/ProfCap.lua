@@ -116,19 +116,30 @@ local function BuildTrainers()
     local Get = lib.Npc.Get
     local myFaction = (UnitFactionGroup("player") or ""):sub(1, 1)   -- "A" or "H"
     local classTitle = ClassWord() .. " trainer"
+    -- NPC flag bits for this game version (they differ between expansions).
+    local NF = lib.Enum and lib.Enum.npcFlags or {}
     for _, id in ipairs(lib.Npc.GetAllIds()) do
         local okF, flags = pcall(Get, id, "npcFlags")
-        -- General goods vendors (not trainers): matched on their title alone.
+        local function HasFlag(f) return f and okF and type(flags) == "number" and bit.band(flags, f) ~= 0 end
+        -- Non-trainers: general goods vendors (by title), plus bankers, auctioneers and
+        -- repair NPCs (by NPC flag or title) for the minimap icons in MinimapTownsfolk.lua.
         local _, gsub = pcall(Get, id, "subName")
-        if type(gsub) == "string" then
-            local lg = gsub:lower()
-            if lg:find("general goods", 1, true) or lg:find("general supplies", 1, true) then
-                local _, friendly = pcall(Get, id, "friendlyToFaction")
-                local _, spawns = pcall(Get, id, "spawns")
-                local _, name = pcall(Get, id, "name")
-                if type(friendly) == "string" and friendly:find(myFaction, 1, true) and type(spawns) == "table" then
-                    trainers[GOODS_KEY] = trainers[GOODS_KEY] or {}
-                    table.insert(trainers[GOODS_KEY], { id = id, name = name or "?", sub = gsub, spawns = spawns })
+        local lg = type(gsub) == "string" and gsub:lower() or ""
+        local keys = {}
+        if lg:find("general goods", 1, true) or lg:find("general supplies", 1, true) then keys[#keys + 1] = GOODS_KEY end
+        if HasFlag(NF.BANKER) or lg:find("banker", 1, true) then keys[#keys + 1] = "BANK" end
+        if HasFlag(NF.AUCTIONEER) or lg:find("auctioneer", 1, true) then keys[#keys + 1] = "AUCTION" end
+        if HasFlag(NF.REPAIR) then keys[#keys + 1] = "REPAIR" end
+        if HasFlag(NF.FLIGHT_MASTER) then keys[#keys + 1] = "FLIGHT" end   -- FlightPoints.lua fallback
+        if #keys > 0 then
+            local _, friendly = pcall(Get, id, "friendlyToFaction")
+            local _, spawns = pcall(Get, id, "spawns")
+            local _, name = pcall(Get, id, "name")
+            if type(friendly) == "string" and friendly:find(myFaction, 1, true) and type(spawns) == "table" then
+                local t = { id = id, name = name or "?", sub = type(gsub) == "string" and gsub or nil, spawns = spawns }
+                for _, key in ipairs(keys) do
+                    trainers[key] = trainers[key] or {}
+                    table.insert(trainers[key], t)
                 end
             end
         end
@@ -183,6 +194,15 @@ local function BuildTrainers()
     end
     return trainers
 end
+
+-- For other features: NPCs of one kind ("BANK", "AUCTION", GOODS_KEY...) as
+-- { {id, name, sub, spawns = { [questieZone] = { {x, y}, ... } }}, ... } (nil without QuestieDB),
+-- and the QuestieDB zone -> map ID table.
+function ns.GetTownNpcs(key)
+    local list = BuildTrainers()
+    return list and (list[key] or {})
+end
+ns.LoadAreaMap = LoadAreaMap
 
 -- Where the player is: continent ID and world position, or nil (e.g. inside a dungeon).
 local function PlayerWorld()
@@ -261,7 +281,8 @@ local function GuideTo(p)
     if not c then ns:Print(note); return end
     local info = C_Map.GetMapInfo(c.uiMap)
     local zone = info and info.name or ("map " .. c.uiMap)
-    local where = ("%s <%s> - %s %.1f, %.1f"):format(c.t.name, c.t.sub, zone, c.x, c.y)
+    local title = c.t.sub and (" <" .. c.t.sub .. ">") or ""   -- auctioneers found by NPC flag may have no title
+    local where = ("%s%s - %s %.1f, %.1f"):format(c.t.name, title, zone, c.x, c.y)
     if c.dist then where = where .. (" (~%d yd)"):format(c.dist) end
 
     local placed = false
@@ -428,6 +449,11 @@ local function GuideToGeneralGoods()
     GuideTo({ name = "General Goods", skillLine = GOODS_KEY })
 end
 
+-- Nearest auctioneer (by NPC flag or title) = nearest auction house.
+local function GuideToAuctionHouse()
+    GuideTo({ name = "Auction House", skillLine = "AUCTION" })
+end
+
 -- Weapon skills you already have, from the character's skill list (English names).
 local function KnownWeapons()
     local known = {}
@@ -446,6 +472,7 @@ if Menu and Menu.ModifyMenu then
         root:CreateDivider()
         root:CreateButton("Mark closest Class Trainer", GuideToClassTrainer)
         root:CreateButton("Mark closest General Goods", GuideToGeneralGoods)
+        root:CreateButton("Mark closest Auction House", GuideToAuctionHouse)
         if HAS_WEAPON_SKILLS then
             -- Submenu: one entry per weapon; ones you already know are greyed and marked.
             local sub = root:CreateButton("Mark closest Weapon Master")
@@ -485,12 +512,13 @@ ns:RegisterOption({
     key = "classTrainerMenu",
     type = "toggle",
     label = "\"Mark closest Trainer\" items when right-clicking your portrait",
-    tooltip = "Adds \"Mark closest Class Trainer\", \"Mark closest General Goods\", \"Mark closest Weapon Master\" (with a choice of weapon; only in games that still have weapon skills) and a \"Mark closest <Profession> Trainer\" for each of your professions to the menu you get by right-clicking your own portrait. Each puts a waypoint on the nearest matching trainer (needs QuestieDB). For a profession it looks for a trainer who teaches your next rank.",
+    tooltip = "Adds \"Mark closest Class Trainer\", \"Mark closest General Goods\", \"Mark closest Auction House\", \"Mark closest Weapon Master\" (with a choice of weapon; only in games that still have weapon skills) and a \"Mark closest <Profession> Trainer\" for each of your professions to the menu you get by right-clicking your own portrait. Each puts a waypoint on the nearest matching trainer (needs QuestieDB). For a profession it looks for a trainer who teaches your next rank.",
     default = true,
 })
 
 ns:RegisterCommand("trainer", "waypoint to the nearest trainer for your class", GuideToClassTrainer)
 ns:RegisterCommand("goods", "waypoint to the nearest General Goods vendor", GuideToGeneralGoods)
+ns:RegisterCommand("ah", "waypoint to the nearest auction house (auctioneer)", GuideToAuctionHouse)
 ns:RegisterCommand("weapon","waypoint to the nearest weapon master; /p13 weapon <weapon> (e.g. daggers, 2h swords) = nearest one who teaches it", function(arg)
     arg = strtrim(arg or ""):lower():gsub("^1h ", "one-handed "):gsub("^2h ", "two-handed ")
     if arg == "" then GuideToWeaponMaster(); return end
