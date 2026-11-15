@@ -454,6 +454,24 @@ local function GuideToAuctionHouse()
     GuideTo({ name = "Auction House", skillLine = "AUCTION" })
 end
 
+-- Secondary professions always offered in the portrait menu, learned or not (menu order).
+local SECONDARY = {
+    { skillLine = 129, name = "First Aid", icon = "Interface\\Icons\\Spell_Holy_SealOfSacrifice" },
+    { skillLine = 185, name = "Cooking",   icon = "Interface\\Icons\\INV_Misc_Food_15" },
+    { skillLine = 356, name = "Fishing",   icon = "Interface\\Icons\\Trade_Fishing" },
+}
+local IS_SECONDARY = {}
+for _, s in ipairs(SECONDARY) do IS_SECONDARY[s.skillLine] = true end
+
+-- The secondary profession as Professions() gives it if learned (so GuideTo can pick a
+-- trainer for your next rank), otherwise a stand-in with no cap (any trainer will do).
+local function SecondaryProf(s, known)
+    for _, p in ipairs(known) do
+        if p.skillLine == s.skillLine then return p end
+    end
+    return { name = s.name, icon = s.icon, skillLine = s.skillLine }
+end
+
 -- Weapon skills you already have, from the character's skill list (English names).
 local function KnownWeapons()
     local known = {}
@@ -486,11 +504,18 @@ if Menu and Menu.ModifyMenu then
         end
         -- Read fresh each time the menu opens, so new/dropped professions show up.
         -- GuideTo uses the profession's cap to pick a trainer who teaches the next rank.
-        for _, p in ipairs(Professions()) do
-            if PROF_WORDS[p.skillLine] then
+        local known = Professions()
+        for _, p in ipairs(known) do
+            if PROF_WORDS[p.skillLine] and not IS_SECONDARY[p.skillLine] then
                 local icon = p.icon and ("|T" .. p.icon .. ":14:14:0:0|t ") or ""
                 root:CreateButton(icon .. "Mark closest " .. p.name .. " Trainer", function() GuideTo(p) end)
             end
+        end
+        -- First Aid, Cooking and Fishing are always listed, even before you learn them.
+        for _, s in ipairs(SECONDARY) do
+            local p = SecondaryProf(s, known)
+            local icon = p.icon and ("|T" .. p.icon .. ":14:14:0:0|t ") or ""
+            root:CreateButton(icon .. "Mark closest " .. p.name .. " Trainer", function() GuideTo(p) end)
         end
     end)
 end
@@ -512,7 +537,7 @@ ns:RegisterOption({
     key = "classTrainerMenu",
     type = "toggle",
     label = "\"Mark closest Trainer\" items when right-clicking your portrait",
-    tooltip = "Adds \"Mark closest Class Trainer\", \"Mark closest General Goods\", \"Mark closest Auction House\", \"Mark closest Weapon Master\" (with a choice of weapon; only in games that still have weapon skills) and a \"Mark closest <Profession> Trainer\" for each of your professions to the menu you get by right-clicking your own portrait. Each puts a waypoint on the nearest matching trainer (needs QuestieDB). For a profession it looks for a trainer who teaches your next rank.",
+    tooltip = "Adds \"Mark closest Class Trainer\", \"Mark closest General Goods\", \"Mark closest Auction House\", \"Mark closest Weapon Master\" (with a choice of weapon; only in games that still have weapon skills) and a \"Mark closest <Profession> Trainer\" for each of your professions (First Aid, Cooking and Fishing are always listed, even if you haven't learned them) to the menu you get by right-clicking your own portrait. Each puts a waypoint on the nearest matching trainer (needs QuestieDB). For a profession it looks for a trainer who teaches your next rank.",
     default = true,
 })
 
@@ -540,6 +565,10 @@ ns:RegisterCommand("prof", "list your professions and caps; /p13 prof <name> = w
     if arg ~= "" then
         for _, p in ipairs(list) do
             if p.name:lower():find(arg, 1, true) then GuideTo(p); return end
+        end
+        -- First Aid / Cooking / Fishing work even if not learned yet.
+        for _, s in ipairs(SECONDARY) do
+            if s.name:lower():find(arg, 1, true) then GuideTo(SecondaryProf(s, list)); return end
         end
         ns:Print("You don't have a profession matching \"" .. arg .. "\".")
         return
