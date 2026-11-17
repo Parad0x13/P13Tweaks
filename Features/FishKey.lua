@@ -70,8 +70,8 @@ local function IsFishing(spellID)
 end
 
 ---------------------------------------------------------------------------
--- Louder splash: while the line is out, sound effects go to full and music/ambience are
--- muted so the bobber's splash stands out; sound also keeps playing when WoW isn't the
+-- Louder splash: while the line is out, sound effects go to full and music, ambience,
+-- dialog, emote, pet and error-speech sounds are muted so the bobber's splash stands out; sound also keeps playing when WoW isn't the
 -- active window. Your settings are saved first (in P13TweaksDB, so a /reload or disconnect
 -- mid-cast still gets them back at next login) and put back shortly after you reel in.
 ---------------------------------------------------------------------------
@@ -85,6 +85,11 @@ local LOUD = {
     Sound_MusicVolume = "0",
     Sound_AmbienceVolume = "0",
     Sound_EnableSoundWhenGameIsInBG = "1",
+    -- other sound channels that aren't the splash (a CVar this client lacks is skipped)
+    Sound_DialogVolume = "0",          -- NPC and player voices
+    Sound_EnableEmoteSounds = "0",     -- /laugh, /cheer etc. from players nearby
+    Sound_EnablePetSounds = "0",       -- pet and companion noises
+    Sound_EnableErrorSpeech = "0",     -- "I can't do that yet" voice lines
 }
 local LOUD_RESTORE_DELAY = 3   -- seconds; recasting within this keeps the loud settings
 
@@ -164,7 +169,7 @@ ns:RegisterOption({
     numberKey = "fishLoudSfx",
     numberDefault = DEFAULT_SFX_PCT,
     min = 0, max = 100, step = 5,
-    tooltip = "While your line is out: the game's Sound Effects volume is set to the slider's % (the splash is a sound effect), music and ambient sound are muted, and sound keeps playing when WoW isn't the active window. Master volume isn't touched. Your own sound settings come back a few seconds after you stop fishing.\n\nDrag the slider while your line is out to hear the difference straight away.",
+    tooltip = "While your line is out: the game's Sound Effects volume is set to the slider's % (the splash is a sound effect), music, ambient sound, voices/dialog, emote sounds, pet sounds and error speech are muted, and sound keeps playing when WoW isn't the active window. Master volume isn't touched. Your own sound settings come back a few seconds after you stop fishing.\n\nDrag the slider while your line is out to hear the difference straight away.",
     default = true,
     onChange = function(v)
         if v == false then

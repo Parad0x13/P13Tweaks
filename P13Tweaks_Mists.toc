@@ -21,4 +21,6 @@ Features\FishKey.lua
 Features\KillsToLevel.lua
 Features\ChatFade.lua
 Features\ChatScroll.lua
+Features\SpellReady.lua
+Features\QuestShare.lua
 Options.lua

@@ -21,14 +21,17 @@ local LINE_H = 16
 
 -- skill line ID (GetProfessionInfo's 7th value) -> words a trainer's title contains
 local PROF_WORDS = {
-    [164] = { "blacksmith" },          [165] = { "leatherwork" },
+    [164] = { "blacksmith" },          [165] = { "leatherwork", "leathercraft" },
     [171] = { "alchem" },              [197] = { "tailor" },
     [202] = { "engineer" },            [333] = { "enchant" },
     [182] = { "herbalis" },            [186] = { "mining", "miner" },
     [393] = { "skinn" },               [755] = { "jewelcraft" },
     [773] = { "inscription", "scribe" },
-    [129] = { "first aid" },           [185] = { "cook", "chef" },
-    [356] = { "fishing", "fisherman" },
+    -- "Medic" (Zephras Isle), "Physician" and "Trauma Surgeon" teach First Aid too.
+    [129] = { "first aid", "medic", "physician", "surgeon" },
+    [185] = { "cook", "chef" },
+    -- "fisher" covers "Fisherman" and the plain "Fisher" title (e.g. Baelann Swiftcurrent in Valanaar).
+    [356] = { "fishing", "fisher" },
 }
 -- Ranks in order; a cap of 75 means the next rank to learn is Journeyman, and so on.
 local RANKS = { "apprentice", "journeyman", "expert", "artisan", "master", "grand master" }

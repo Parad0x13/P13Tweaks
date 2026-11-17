@@ -1,4 +1,4 @@
-# P13Tweaks – Handoff (2026-11-10)
+# P13Tweaks – Handoff (2026-11-16)
 
 ## What this is
 Personal quality-of-life addon for **WoW Forever** (`P13Tweaks.toc`, interface 16001) and
@@ -39,8 +39,28 @@ Personal quality-of-life addon for **WoW Forever** (`P13Tweaks.toc`, interface 1
 | KillsToLevel | "N more" popup under the character after an XP kill + per-mob kill tally line; kill counts window with per-mob / all clear | `kills`, `killtest`, `killmove` |
 | ChatFade | chat hidden until hovered; optional: show for N seconds when a message arrives | `chat` |
 | ChatScroll | one wheel notch = one line; Shift = top/bottom, Ctrl = page | |
+| SpellReady | chime when a typed spell (default "Skysight", comma list, item names too) comes off cooldown. On cooldown events it sets a `C_Timer` for the ready moment; GCD (≤1.5 s) ignored; only chimes after it has seen the spell cooling. Sound: auction house bell ding (`SOUNDKIT.AUCTION_WINDOW_OPEN`). Option `spellReady` + `spellReadyNames` | `ready` |
+| QuestShare | teammates' quests + objective progress, only for group members who also run P13Tweaks (the game exposes no one else's quest log). Addon messages, prefix `P13Q`, on PARTY/RAID/INSTANCE_CHAT: `H^proto` hello (answered with a full list), `C` clear, `Q^id^state^title^+obj~-obj`, `R^id`, `X` sharing off. Own token-bucket send queue (8 burst, 1/1.1 s). Deltas from `QUEST_LOG_UPDATE` (1 s debounce); quests hidden under collapsed headers are kept, not removed. Window ("Ask again" re-sends hello) + tooltip line "Name: 3/10" when an objective text contains the hovered mob/item name. Options `questShare` (+ View), `questShareTooltips` | `quests`, `questsdemo` (pretend teammate = your own log, for testing solo) |
 
-## This session's changes
+## Sharing with another PC
+`installer/Install P13Tweaks.bat` → `installer/Update-P13Tweaks.ps1 -Install`: downloads `main` from GitHub
+(API zipball; `$Token` needed while the repo is private), copies into every `_forever_`/`_classic_`
+`Interface\AddOns\P13Tweaks` it finds (skips `installer`, `tools`, `link.ps1`, `HANDOFF.md`; never touches a
+junction), stores the commit sha in `%LOCALAPPDATA%\P13Tweaks\installed.txt`, adds a hidden Startup-folder
+shortcut (`-Quiet`, runs at every Windows start) and a desktop "Update P13Tweaks" shortcut. Log:
+`%LOCALAPPDATA%\P13Tweaks\update.log`. Not run yet (repo private, no token).
+
+## Latest session (2026-11-16)
+- **QuestShare** (new, multiplayer): see the table row above. Untested in game; `/p13 questsdemo` tests it solo.
+- **SpellReady** (new): spell-ready chime (was uncommitted from the previous session).
+- **ProfCap trainer titles**: Forever's Zephras Isle Fishing trainer Baelann Swiftcurrent is titled `<Fisher>`
+  (Valanaar, 63.3 75.7) and was missed; fishing words are now `fishing`/`fisher`. Also First Aid
+  `medic`/`physician`/`surgeon` and Leatherworking `leathercraft`. Found by decoding QuestieDB's baked
+  data: `QuestieDB_Forever.toc` lines `## X-Npc-<id>-<field>: <base64 CBOR>` (field `S` = map of the
+  string/number fields by key index: 1 name, 13 friendlyToFaction, 14 subName, 15 npcFlags; field `7` = spawns).
+- **installer/** (new): see "Sharing with another PC". The partner's setup (public repo vs token) isn't decided yet.
+
+## Earlier session's changes
 - **RangeBeep**: "beep when target is X yards" with a typed number (default 30); ranges from the
   LibRangeCheck item list, 28 yd via follow range.
 - **ProfCap** (new): cap notice, trainer waypoints from QuestieDB (`C_Map.SetUserWaypoint` + supertrack),
@@ -66,6 +86,6 @@ Personal quality-of-life addon for **WoW Forever** (`P13Tweaks.toc`, interface 1
    statistic (`GetStatistic`, only if Forever has achievements) in the kill window.
 
 ## Git
-Clean and pushed as of `7e80d7d` ("Add weapon master and General Goods waypoints", which also holds the
-per-profession trainer menu items). Commit/push only when the user asks; end messages with
+Everything committed and pushed at the end of the 2026-11-16 session (quest sharing, spell-ready chime,
+trainer title fix, installer). Commit/push on "close"/"handover"; end messages with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
