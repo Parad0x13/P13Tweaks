@@ -80,7 +80,19 @@ junction), stores the commit sha in `%LOCALAPPDATA%\P13Tweaks\installed.txt`, ad
 shortcut (`-Quiet`, runs at every Windows start) and a desktop "Update P13Tweaks" shortcut. Log:
 `%LOCALAPPDATA%\P13Tweaks\update.log`. Not run yet (repo private, no token).
 
-## Latest session (2026-11-16, late) – committed at "handover"
+## Session 2026-11-17 (v0.2.0 to v0.3.2; the quest-log button was tried and replaced by a footer button in /p13) – untested in game, not yet committed
+- **Versioning**: `## Version:` in BOTH .toc files is bumped on every update (user's request, so they and their
+  friend can confirm matching builds). `ns.version` (Core.lua) reads it. Shown in the options title, in the quest
+  window ("Versions:" line, red when different), via `/p13 version`, and exchanged in `H^proto^ver` / `C^ver`
+  (old clients ignore the extra field); a one-time chat line appears when a teammate's version differs.
+- **QuestShare**: window now has two views (button toggles, saved as `questShareView`): *By quest* (union of everyone's
+  quests, each player's status: progress counts / ready / failed / "already completed" / "not started") and the old
+  *By player*. New message `D^id` = "I finished that quest" (sent only for quest ids someone in the group has had, so
+  "not started" vs "done" can be told apart). Clicking one of your quests, or "Share all", pushes it to the group with
+  the game's own `QuestLogPushQuest` (2 s apart). New option `questShareAuto` (default off): `AcceptQuest()` on
+  `QUEST_DETAIL` when the "npc" is a group member. Players without P13Tweaks are listed as "can't be shown".
+
+## Session (2026-11-16, late) – committed at "handover"
 Status per item: what the user reported in game. Everything else here is untested.
 - **Flight master's map**: not-unlocked flight points as red-cross icons – **confirmed right**.
 - **Zephras Isle terrain** (own world, instance 2991; tiles from the listfile) – added, not commented on.
@@ -176,3 +188,7 @@ User-tested in game unless noted:
 Everything committed and pushed at the end of the 2026-11-16 late session (routes, overlay, cave view,
 quest enemy arrow, free keys, Zephras terrain, flight master map icons). Commit/push on "close"/"handover"; end messages with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+
+- **v0.3.x additions**: `Features/MinimapButton.lua` (round "P13" minimap button; left = options, right = `/p13 quests`,
+  draggable, angle in `minimapButtonAngle`, option `minimapButton`). The /p13 window footer has a "Teammates' quests"
+  button (calls `ns.commands.quests`). The quest-log "Teammates" button and its option were removed in 0.3.2.

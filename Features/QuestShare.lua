@@ -12,6 +12,11 @@
 --                      each objective starts with + (done) or - (not done)
 --   R^<id>             that quest left my log
 --   X                  I turned sharing off: forget me
+--   D^<id>             I've already finished that quest (sent only for quests someone in the group
+--                      has had, so the window can tell "not started" from "already done")
+-- The window (/p13 quests) has two views: by quest (every quest anyone has, with where each player
+-- is on it - including players who haven't picked it up) and by player. Clicking one of your own
+-- quests shares it with the group through the game's normal quest sharing.
 local ADDON_NAME, ns = ...
 
 local PREFIX = "P13Q"
@@ -24,9 +29,21 @@ local members = {}    -- name -> { quests = { [id] = { title, state, objs = { {t
 local myQuests = {}   -- my own quest log, same shape (plus .header)
 local lastSent = {}   -- id -> the message we last sent for that quest
 local warned = {}     -- name -> true once we've said their P13Tweaks is a different version
+local seen = {}       -- id -> title: every quest anyone in the group has had in their log
+local sentDone = {}   -- id -> true once I've told the group I finished it
 local RefreshWindow   -- set further down
+local ReportDone      -- set further down
 
 local function Sharing() return ns:Get("questShare") end
+
+-- Have I already finished this quest (turned it in)?
+local function Completed(id)
+    if C_QuestLog and C_QuestLog.IsQuestFlaggedCompleted then
+        return C_QuestLog.IsQuestFlaggedCompleted(id) and true or false
+    end
+    if IsQuestFlaggedCompleted then return IsQuestFlaggedCompleted(id) and true or false end
+    return false
+end
 
 -- Runs fn after delay seconds; asking again while it's waiting does nothing (so bursts become one call).
 local pending = {}
@@ -184,22 +201,36 @@ local function UpdateMine()
         end
     end
     myQuests = quests
+    for id, q in pairs(quests) do seen[id] = q.title end
+    Later("done", 3, function() ReportDone() end)
     Later("window", 0.2, function() RefreshWindow() end)
+end
+
+-- Tells the group which of the quests they know about I've already finished.
+ReportDone = function()
+    if not (Sharing() and Channel()) then return end
+    for id in pairs(seen) do
+        if not sentDone[id] and not myQuests[id] and Completed(id) then
+            sentDone[id] = true
+            Send("D^" .. id)
+        end
+    end
 end
 
 local function SendFull()
     if not (Sharing() and Channel()) then return end
     -- The full list replaces any quest messages still waiting to go out.
     for i = #queue, 1, -1 do
-        if queue[i]:find("^[QRC]") then table.remove(queue, i) end
+        if queue[i]:find("^[QRCD]") then table.remove(queue, i) end
     end
     wipe(lastSent)
-    Send("C")
+    wipe(sentDone)
+    Send("C^" .. ns.version)
     UpdateMine()
 end
 
 local function SayHello()
-    if Sharing() then Send("H^" .. PROTOCOL) end
+    if Sharing() then Send("H^" .. PROTOCOL .. "^" .. ns.version) end
 end
 
 ---------------------------------------------------------------------------
@@ -209,6 +240,13 @@ end
 local function ShortName(sender)
     if Ambiguate then return Ambiguate(sender, "none") end
     return sender
+end
+
+-- Says so once if a teammate's P13Tweaks is a different version from mine.
+local function CheckVersion(who, ver)
+    if not ver or ver == ns.version or warned[who .. ver] then return end
+    warned[who .. ver] = true
+    ns:Print(("%s has P13Tweaks v%s, you have v%s."):format(who, ver, ns.version))
 end
 
 local function OnMessage(msg, sender)
@@ -221,6 +259,8 @@ local function OnMessage(msg, sender)
         local proto = tonumber(msg:match("^H%^(%d+)"))
         if not m then m = { quests = {} }; members[who] = m end
         m.protocol = proto
+        m.version = msg:match("^H%^%d+%^(.+)$") or m.version
+        CheckVersion(who, m.version)
         if proto and proto ~= PROTOCOL and not warned[who] then
             warned[who] = true
             ns:Print(("%s has a %s P13Tweaks, so quest sharing may not work until you both have the latest one.")
@@ -228,7 +268,9 @@ local function OnMessage(msg, sender)
         end
         Later("full", 2, SendFull)   -- they just arrived (or reloaded): send them my list
     elseif kind == "C" then
-        members[who] = { quests = {}, protocol = m and m.protocol }
+        local ver = msg:match("^C%^(.+)$") or (m and m.version)
+        members[who] = { quests = {}, protocol = m and m.protocol, version = ver }
+        CheckVersion(who, ver)
     elseif kind == "X" then
         members[who] = nil
     elseif kind == "Q" then
@@ -236,6 +278,17 @@ local function OnMessage(msg, sender)
         if id then
             if not m then m = { quests = {} }; members[who] = m end
             m.quests[id] = q
+            m.done = m.done or {}
+            m.done[id] = nil
+            seen[id] = q.title
+            Later("done", 2, function() ReportDone() end)   -- if I've finished it, say so
+        end
+    elseif kind == "D" then
+        local id = tonumber(msg:match("^D%^(%d+)"))
+        if id then
+            if not m then m = { quests = {} }; members[who] = m end
+            m.done = m.done or {}
+            m.done[id] = true
         end
     elseif kind == "R" then
         local id = tonumber(msg:match("^R%^(%d+)"))
@@ -265,7 +318,7 @@ end
 
 local function OnRoster()
     if not Channel() then
-        wipe(roster); wipe(queue); wipe(lastSent)
+        wipe(roster); wipe(queue); wipe(lastSent); wipe(sentDone); wipe(seen)
         for name, m in pairs(members) do if not m.demo then members[name] = nil end end
         RefreshWindow()
         return
@@ -288,9 +341,81 @@ end
 -- Window: /p13 quests
 ---------------------------------------------------------------------------
 
-local W = 300
+local W = 340
 local win, content, emptyText
 local lines = {}
+local btns = {}
+
+local function ViewMode() return ns:Get("questShareView") == "player" and "player" or "quest" end
+
+-- Shares one of my quests with the group (the game's own quest sharing: they get an accept prompt).
+local function PushQuest(id)
+    if not Channel() then return false, "you're not in a group" end
+    local index
+    for i = 1, NumEntries() do
+        local _, isHeader, _, _, qid = Entry(i)
+        if not isHeader and qid == id then index = i; break end
+    end
+    if SelectQuestLogEntry and index then
+        SelectQuestLogEntry(index)
+    elseif C_QuestLog and C_QuestLog.SetSelectedQuest then
+        C_QuestLog.SetSelectedQuest(id)
+    else
+        return false, "its zone is collapsed in your quest log - expand it first"
+    end
+    local can = true
+    if C_QuestLog and C_QuestLog.IsPushableQuest then can = C_QuestLog.IsPushableQuest(id)
+    elseif GetQuestLogPushable then can = GetQuestLogPushable() end
+    if not can then return false, "the game doesn't allow sharing this quest" end
+    if not QuestLogPushQuest then return false, "this game version can't share quests" end
+    QuestLogPushQuest()
+    return true
+end
+
+-- Does anyone with P13Tweaks in the group still need this quest (haven't got it, haven't finished it)?
+local function NeededBySomeone(id)
+    for _, m in pairs(members) do
+        if not m.demo and not m.quests[id] and not (m.done and m.done[id]) then return true end
+    end
+end
+
+local function ShareAll()
+    if not Channel() then ns:Print("You're not in a group."); return end
+    local ids = {}
+    for id in pairs(myQuests) do if NeededBySomeone(id) then table.insert(ids, id) end end
+    table.sort(ids, function(a, b) return (myQuests[a].title or "") < (myQuests[b].title or "") end)
+    if #ids == 0 then ns:Print("Everyone in your group already has or has finished all your quests."); return end
+    ns:Print(("Sharing %d quest%s - your group will get an accept prompt for each."):format(#ids, #ids == 1 and "" or "s"))
+    local failed = 0
+    for k, id in ipairs(ids) do
+        C_Timer.After((k - 1) * 2, function()
+            if not PushQuest(id) then failed = failed + 1 end
+            if k == #ids and failed > 0 then
+                ns:Print(("%d couldn't be shared (the game doesn't allow sharing some quests)."):format(failed))
+            end
+        end)
+    end
+end
+
+local function QuestButton(i)
+    if btns[i] then return btns[i] end
+    local b = CreateFrame("Button", nil, content)
+    b:SetHighlightTexture("Interface\\Buttons\\WHITE8X8")
+    b:GetHighlightTexture():SetVertexColor(1, 1, 1, 0.12)
+    b:SetScript("OnClick", function(self)
+        local ok, why = PushQuest(self.questId)
+        if ok then ns:Print("Shared \"" .. (myQuests[self.questId] and myQuests[self.questId].title or "quest") .. "\" with your group.")
+        else ns:Print("Couldn't share it: " .. why .. ".") end
+    end)
+    b:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Click to share this quest with your group", 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    btns[i] = b
+    return b
+end
 
 local function Line(i)
     if lines[i] then return lines[i] end
@@ -326,6 +451,27 @@ local function BuildWindow()
     title:SetPoint("TOP", 0, -5)
     title:SetText("Teammates' quests")
 
+    local viewBtn = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
+    viewBtn:SetSize(100, 20)
+    viewBtn:SetPoint("TOPLEFT", 12, -32)
+    viewBtn:SetScript("OnClick", function()
+        ns:Set("questShareView", ViewMode() == "quest" and "player" or "quest")
+        RefreshWindow()
+    end)
+    win.viewBtn = viewBtn
+
+    local shareBtn = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
+    shareBtn:SetSize(80, 20)
+    shareBtn:SetPoint("LEFT", viewBtn, "RIGHT", 4, 0)
+    shareBtn:SetText("Share all")
+    shareBtn:SetScript("OnClick", ShareAll)
+    shareBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+        GameTooltip:SetText("Share every quest of yours that someone in the group still needs", 1, 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    shareBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
     local ask = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
     ask:SetSize(90, 20)
     ask:SetPoint("TOPRIGHT", -12, -32)
@@ -360,11 +506,73 @@ local function SortedQuests(quests)
     return list
 end
 
-RefreshWindow = function()
-    if not (win and win:IsShown()) then return end
+-- One quest's progress as a short phrase ("3/10, 0/5").
+local function Summary(q)
+    if q.state == 1 then return "|cff40ff40ready to turn in|r" end
+    if q.state == -1 then return "|cffff4040failed|r" end
+    local parts = {}
+    for _, o in ipairs(q.objs) do
+        local count = o[1]:match("(%d+%s*/%s*%d+)")
+        if count then table.insert(parts, o[2] and ("|cff808080" .. count .. "|r") or count)
+        else table.insert(parts, o[2] and "|cff808080done|r" or Cut(o[1], 30)) end
+    end
+    if #parts == 0 then return "in progress" end
+    return table.concat(parts, ", ")
+end
 
-    -- Build the lines as { text, indent, gapBefore }.
-    local out = {}
+-- By quest: every quest anyone has, with each player's place on it - including players who haven't started it.
+local function BuildByQuest(out)
+    local players = {}
+    local _, myClass = UnitClass("player")
+    local mc = myClass and RAID_CLASS_COLORS and RAID_CLASS_COLORS[myClass]
+    table.insert(players, { name = "You", color = mc and mc.colorStr and ("|c" .. mc.colorStr) or "|cff33ff99",
+        quests = myQuests, isDone = Completed })
+    local names = {}
+    for name in pairs(members) do table.insert(names, name) end
+    table.sort(names)
+    for _, name in ipairs(names) do
+        local m = members[name]
+        table.insert(players, { name = name, color = NameColor(name), quests = m.quests,
+            isDone = function(id) return m.done and m.done[id] end })
+    end
+    if #names == 0 then return end
+
+    local ids, title = {}, {}
+    for _, p in ipairs(players) do
+        for id, q in pairs(p.quests) do
+            if not title[id] then title[id] = q.title or seen[id] or "?"; table.insert(ids, id) end
+        end
+    end
+    table.sort(ids, function(a, b) return title[a] < title[b] end)
+
+    local missing = {}
+    for name in pairs(GroupNames()) do if not members[name] then table.insert(missing, name) end end
+    table.sort(missing)
+    local vers = {}
+    for _, p in ipairs(players) do
+        local v = p.name == "You" and ns.version or members[p.name].version
+        local c = (v == nil or v == ns.version) and "|cff808080" or "|cffff6040"
+        table.insert(vers, c .. p.name .. " v" .. (v or "?") .. "|r")
+    end
+    table.insert(out, { "Versions: " .. table.concat(vers, "  "), 0, 0 })
+    table.insert(out, { "|cff808080Click one of your quests to share it with the group.|r", 0, 2 })
+    if #missing > 0 then
+        table.insert(out, { "|cff808080No P13Tweaks (can't be shown): " .. table.concat(missing, ", ") .. "|r", 0, 2 })
+    end
+    if #ids == 0 then table.insert(out, { "|cff808080(nobody has any quests)|r", 0, 8 }) end
+
+    for _, id in ipairs(ids) do
+        table.insert(out, { "|cffffd200" .. title[id] .. "|r", 0, 10, myQuests[id] and id or nil })
+        for _, p in ipairs(players) do
+            local q = p.quests[id]
+            local status = q and Summary(q) or (p.isDone(id) and "|cff40c0ffalready completed|r") or "|cff808080not started|r"
+            table.insert(out, { p.color .. p.name .. "|r: " .. status, 14, 1 })
+        end
+    end
+end
+
+-- By player: each teammate's quest log.
+local function BuildByPlayer(out)
     local names = {}
     for name in pairs(members) do table.insert(names, name) end
     table.sort(names)
@@ -388,8 +596,18 @@ RefreshWindow = function()
             end
         end
     end
+end
+
+RefreshWindow = function()
+    if not (win and win:IsShown()) then return end
+    win.viewBtn:SetText(ViewMode() == "quest" and "View: by quest" or "View: by player")
+
+    -- Lines are { text, indent, gapBefore, questId (when clicking it shares that quest) }.
+    local out = {}
+    if ViewMode() == "quest" then BuildByQuest(out) else BuildByPlayer(out) end
 
     local y = 0
+    local nb = 0
     for i, e in ipairs(out) do
         local fs = Line(i)
         y = y + e[3]
@@ -398,9 +616,20 @@ RefreshWindow = function()
         fs:SetWidth(W - e[2])
         fs:SetText(e[1])
         fs:Show()
-        y = y + fs:GetStringHeight()
+        local h = fs:GetStringHeight()
+        if e[4] then
+            nb = nb + 1
+            local b = QuestButton(nb)
+            b.questId = e[4]
+            b:ClearAllPoints()
+            b:SetPoint("TOPLEFT", e[2], -y)
+            b:SetSize(W - e[2], h)
+            b:Show()
+        end
+        y = y + h
     end
     for i = #out + 1, #lines do lines[i]:Hide() end
+    for i = nb + 1, #btns do btns[i]:Hide() end
 
     if #out == 0 then
         local why = not Sharing() and "Quest sharing is off. Turn it on in /p13."
@@ -485,7 +714,7 @@ ns:RegisterOption({
     default = true,
     onChange = function(on)
         if on then
-            wipe(roster); wipe(lastSent)
+            wipe(roster); wipe(lastSent); wipe(sentDone)
             OnRoster()   -- says hello and sends my list if I'm in a group
         else
             Send("X")
@@ -504,8 +733,25 @@ ns:RegisterOption({
     default = true,
 })
 
+ns:RegisterOption({
+    key = "questShareAuto",
+    type = "toggle",
+    label = "Auto-accept quests my group shares with me",
+    tooltip = "When a group member shares a quest with you, it's accepted straight away instead of asking. Off by default.",
+    default = false,
+})
+
 ns:RegisterCommand("quests", "show your teammates' quests and progress", function()
     ToggleWindow()
+end)
+
+ns:RegisterCommand("version", "show your P13Tweaks version and your teammates'", function()
+    ns:Print("you have v" .. ns.version)
+    for name, m in pairs(members) do
+        if not m.demo then
+            ns:Print(("%s has %s"):format(name, m.version and ("v" .. m.version .. (m.version == ns.version and " (same)" or " (DIFFERENT)")) or "an older P13Tweaks that doesn't report its version"))
+        end
+    end
 end)
 
 ns:RegisterCommand("questsdemo", "add (or remove) a pretend teammate with your own quests, to try the window and tooltips alone", function()
@@ -544,9 +790,15 @@ frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 frame:RegisterEvent("GROUP_ROSTER_UPDATE")
 frame:RegisterEvent("QUEST_LOG_UPDATE")
 frame:RegisterEvent("CHAT_MSG_ADDON")
+frame:RegisterEvent("QUEST_DETAIL")
 frame:SetScript("OnEvent", function(self, event, a1, a2, a3, a4)
     if event == "PLAYER_LOGIN" then
         pcall(HookTooltips)
+    elseif event == "QUEST_DETAIL" then
+        -- A group member shared a quest: the "npc" giving it is a player in my group.
+        if ns:Get("questShareAuto") and UnitIsPlayer("npc") and (UnitInParty("npc") or UnitInRaid("npc")) then
+            pcall(AcceptQuest)
+        end
     elseif event == "CHAT_MSG_ADDON" then
         if a1 == PREFIX and a2 and a4 then OnMessage(a2, a4) end
     elseif event == "QUEST_LOG_UPDATE" then

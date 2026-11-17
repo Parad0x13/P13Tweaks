@@ -2,6 +2,9 @@
 local ADDON_NAME, ns = ...
 
 ns.name = "P13Tweaks"
+-- Version from the .toc ("## Version:"). It's bumped on every update so you and a friend can compare.
+ns.version = (C_AddOns and C_AddOns.GetAddOnMetadata and C_AddOns.GetAddOnMetadata(ADDON_NAME, "Version"))
+    or (GetAddOnMetadata and GetAddOnMetadata(ADDON_NAME, "Version")) or "?"
 ns.options = {}   -- ordered list of option definitions
 
 -- Print a message with the addon's colored prefix.
@@ -49,6 +52,7 @@ events:SetScript("OnEvent", function(self, event, arg1)
         P13TweaksDB.priorityTargetNames, P13TweaksDB.priorityTargetQuests = nil, nil
         P13TweaksDB.tileTestLog, P13TweaksDB.flightDebugLog, P13TweaksDB.taxiDebug = nil, nil, nil  -- removed test/debug logs
         P13TweaksDB.mapDragLog = nil
+        P13TweaksDB.questShareButton = nil  -- removed quest-log button
         P13TweaksDB.fishMap, P13TweaksDB.fishMapView, P13TweaksDB.fishLog = nil, nil, nil  -- removed fishing map
         for _, def in ipairs(ns.options) do
             if P13TweaksDB[def.key] == nil then

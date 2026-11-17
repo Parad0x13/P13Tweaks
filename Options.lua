@@ -23,7 +23,7 @@ local LAYOUT = {
     } },
     { name = "Quests", icon = "Interface\\Icons\\INV_Scroll_03", sections = {
         { "Quest enemies", { "questMobArrow" } },
-        { "Group", { "questShare", "questShareTooltips" } },
+        { "Group", { "questShare", "questShareTooltips", "questShareAuto" } },
     } },
     { name = "Towns", icon = "Interface\\Icons\\INV_Misc_Bag_10", sections = {
         { "Townsfolk", { "minimapTownsfolk", "worldmapTownsfolk" } },
@@ -37,6 +37,7 @@ local LAYOUT = {
     { name = "Chat & keys", icon = "Interface\\Icons\\INV_Letter_15", sections = {
         { "Chat", { "chatFade", "chatFadeShowNew", "chatScrollOne" } },
         { "Keybinds", { "freeKeysInfo" } },
+        { "Minimap", { "minimapButton" } },
     } },
 }
 local OTHER_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
@@ -467,6 +468,16 @@ function ns:CreateOptionsUI()
     local hint = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     hint:SetPoint("BOTTOMLEFT", 12, 8)
     hint:SetText("Hover an option for details.   /p13 help lists the chat commands.")
+
+    -- opens the teammates' quest list (same as /p13 quests)
+    local questsBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    questsBtn:SetSize(150, 20)
+    questsBtn:SetPoint("BOTTOMRIGHT", -8, 3)
+    questsBtn:SetText("Teammates' quests")
+    questsBtn:SetScript("OnClick", function()
+        local c = ns.commands["quests"]
+        if c then c.func() end
+    end)
 
     -- one page per tab
     local controls, pages, buttons = {}, {}, {}
