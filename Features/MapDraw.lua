@@ -1,6 +1,7 @@
 -- P13Tweaks feature: draw on the world map and share it with your group.
--- A "Draw" button sits in the map's button row. While drawing is on, holding the left mouse button and
--- dragging draws a line (dragging no longer pans the map; right-click still goes back, the wheel still zooms).
+-- Hold Shift and drag with the left mouse button on the world map to draw a line (while Shift is held,
+-- dragging draws instead of panning; right-click still goes back, the wheel still zooms). Undo / Clear mine
+-- buttons appear in the map's button row while you have lines.
 -- Each finished stroke is sent to the group over the hidden addon channel; teammates who also run
 -- P13Tweaks see it on their own map, in the sender's class colour. Lines are stored as positions on the
 -- map picture (0..1), so they stay put when you zoom or pan. Lines fade after a few minutes (an option).
@@ -28,7 +29,7 @@ local version = 0      -- bumps whenever the drawing changes (so the map redraws
 local nextId = 0
 local drawing = false  -- draw mode on
 local current          -- the stroke being drawn right now
-local layer, catcher, drawBtn, undoBtn, clearBtn
+local layer, catcher, undoBtn, clearBtn
 local linePool, linesUsed, lastSig = {}, 0, nil
 
 local function On() return ns:Get("mapDraw") end
@@ -262,8 +263,9 @@ local function GroupNames()
     for i = 1, (GetNumGroupMembers() or 0) do
         local unit = raid and ("raid" .. i) or ("party" .. i)
         if UnitExists(unit) and not UnitIsUnit(unit, "player") then
-            local name, realm = UnitName(unit)
-            if name then t[(realm and realm ~= "") and (name .. "-" .. realm) or name] = true end
+            -- just the name: a realm part that appears and disappears made people look like newcomers each time
+            local name = UnitName(unit)
+            if name then t[name] = true end
         end
     end
     return t
@@ -271,7 +273,16 @@ end
 
 local function OnRoster()
     local now = Channel() and GroupNames() or {}
-    RemoveWhere(function(s) return s.owner ~= Me() and not s.demo and not now[s.owner] end)
+    -- an owner's name may carry a realm ("Ann-Realm" / "Ann Realm"): match on the name at the start
+    local function InGroupNow(owner)
+        local o = tostring(owner):lower():gsub("[%s%-'_]", "")
+        for name in pairs(now) do
+            local n = name:lower():gsub("[%s%-'_]", "")
+            if n ~= "" and o:sub(1, #n) == n then return true end
+        end
+        return false
+    end
+    RemoveWhere(function(s) return s.owner ~= Me() and not s.demo and not InGroupNow(s.owner) end)
     local someoneNew = false
     for name in pairs(now) do if not roster[name] then someoneNew = true end end
     roster = now
@@ -378,6 +389,16 @@ local function CursorOnMap()
     if u and v and u >= 0 and u <= 1 and v >= 0 and v <= 1 then return u, v end
 end
 
+-- The mouse catcher over the map is active while Draw is on, while Shift is held (hold Shift and drag
+-- to draw without the button), and while a stroke is still being drawn.
+local shiftHeld = false
+local function RefreshCatcher()
+    if not catcher then return end
+    local active = On() and (drawing or shiftHeld or current ~= nil) and true or false
+    if catcher:IsShown() ~= active then catcher:SetShown(active) end
+    catcher:EnableMouse(active)
+end
+
 local function EndStroke()
     if not current then return end
     local s = current
@@ -392,6 +413,7 @@ local function EndStroke()
         RemoveWhere(function(x) return x == s end)
     end
     Changed()
+    RefreshCatcher()
 end
 
 local function StartStroke()
@@ -417,11 +439,7 @@ local function SetDrawing(on)
     on = on and On() and true or false
     if not on then EndStroke() end
     drawing = on
-    if catcher then
-        catcher:SetShown(on)
-        catcher:EnableMouse(on)
-    end
-    if drawBtn then drawBtn:SetText(on and "Stop drawing" or "Draw") end
+    RefreshCatcher()
     UpdateButtons()
 end
 
@@ -433,11 +451,11 @@ ns:RegisterOption({
     key = "mapDraw",
     type = "toggle",
     label = "Draw on the map and share it with my group",
-    tooltip = "Adds a Draw button to the world map. While it's on, drag with the left mouse button to draw a line. Teammates who also have P13Tweaks see your lines on their map (and you see theirs), each in the sender's class colour. Dragging doesn't pan the map while drawing; right-click still goes back and the wheel still zooms.",
+    tooltip = "Hold Shift and drag with the left mouse button on the world map to draw a line. Teammates who also have P13Tweaks see your lines on their map (and you see theirs), each in the sender's class colour. Undo and Clear mine buttons appear in the map's button row while you have lines. While Shift is held, dragging draws instead of panning the map.",
     default = true,
     onChange = function(on)
         if not on then SetDrawing(false) end
-        if drawBtn then drawBtn:SetShown(on and true or false) end
+        RefreshCatcher()
         Changed()
     end,
 })
@@ -490,7 +508,7 @@ ns:RegisterCommand("mapdraw", "map drawing: /p13 mapdraw clear (your lines), /p1
         ns:Print("Added two pretend teammates' lines to this map. Type /p13 mapdraw demo again to remove them.")
         Redraw(true)
     else
-        ns:Print("Open the world map and press Draw. /p13 mapdraw clear removes your lines; /p13 mapdraw demo tries it alone.")
+        ns:Print("Open the world map, hold Shift and drag to draw. /p13 mapdraw clear removes your lines; /p13 mapdraw demo tries it alone.")
     end
 end)
 
@@ -508,9 +526,13 @@ local events = CreateFrame("Frame")
 events:RegisterEvent("PLAYER_LOGIN")
 events:RegisterEvent("GROUP_ROSTER_UPDATE")
 events:RegisterEvent("CHAT_MSG_ADDON")
+events:RegisterEvent("MODIFIER_STATE_CHANGED")
 events:SetScript("OnEvent", function(_, event, a1, a2, a3, a4)
     if event == "CHAT_MSG_ADDON" then
         if a1 == PREFIX and a2 and a4 then OnMessage(a2, a4) end
+    elseif event == "MODIFIER_STATE_CHANGED" then
+        shiftHeld = IsShiftKeyDown() and WorldMapFrame and WorldMapFrame:IsShown() and true or false
+        RefreshCatcher()
     elseif event == "GROUP_ROSTER_UPDATE" then
         Later("roster", 1, OnRoster)
     else   -- PLAYER_LOGIN
@@ -533,21 +555,6 @@ events:SetScript("OnEvent", function(_, event, a1, a2, a3, a4)
         catcher:SetScript("OnMouseUp", function(_, button) if button == "LeftButton" then EndStroke() end end)
         catcher:SetScript("OnHide", EndStroke)
 
-        drawBtn = CreateFrame("Button", nil, sc, "UIPanelButtonTemplate")
-        drawBtn:SetSize(92, 22)
-        drawBtn:SetText("Draw")
-        drawBtn:SetFrameLevel(sc:GetFrameLevel() + 100)
-        drawBtn:SetScript("OnClick", function() SetDrawing(not drawing) end)
-        drawBtn:SetScript("OnEnter", function(self)
-            GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT")
-            GameTooltip:SetText("Draw on the map")
-            GameTooltip:AddLine("Drag with the left mouse button to draw. Your group sees it on their map too (if they have P13Tweaks).", 1, 1, 1, true)
-            GameTooltip:Show()
-        end)
-        drawBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
-        drawBtn:SetShown(On() and true or false)
-        ns:AddMapButton(drawBtn, 30)
-
         undoBtn = CreateFrame("Button", nil, sc, "UIPanelButtonTemplate")
         undoBtn:SetSize(56, 22)
         undoBtn:SetText("Undo")
@@ -567,7 +574,7 @@ events:SetScript("OnEvent", function(_, event, a1, a2, a3, a4)
         local poll = CreateFrame("Frame", nil, WorldMapFrame)
         poll:SetScript("OnUpdate", function() Redraw(false) end)
         poll:SetScript("OnShow", function() Redraw(true) end)
-        WorldMapFrame:HookScript("OnHide", function() SetDrawing(false) end)
+        WorldMapFrame:HookScript("OnHide", function() shiftHeld = false; SetDrawing(false) end)
 
         C_Timer.NewTicker(15, Prune)
     end

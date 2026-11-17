@@ -54,6 +54,11 @@ events:SetScript("OnEvent", function(self, event, arg1)
         P13TweaksDB.tileTestLog, P13TweaksDB.flightDebugLog, P13TweaksDB.taxiDebug = nil, nil, nil  -- removed test/debug logs
         P13TweaksDB.mapDragLog = nil
         P13TweaksDB.questShareButton = nil  -- removed quest-log button
+        P13TweaksDB.mapCenterButton, P13TweaksDB.mapCenterKey = nil, nil  -- removed map Center button (middle-click does it)
+        -- removed map Overlay feature: if a /reload left the game's "fade map while moving" setting off, put it back
+        if P13TweaksDB.mapOverlaySavedFade then pcall(SetCVar, "mapFade", P13TweaksDB.mapOverlaySavedFade) end
+        P13TweaksDB.mapOverlay, P13TweaksDB.mapOverlayAlpha, P13TweaksDB.mapOverlayAlpha20 = nil, nil, nil
+        P13TweaksDB.mapOverlaySavedFade = nil
         P13TweaksDB.fishMap, P13TweaksDB.fishMapView, P13TweaksDB.fishLog = nil, nil, nil  -- removed fishing map
         for _, def in ipairs(ns.options) do
             if P13TweaksDB[def.key] == nil then

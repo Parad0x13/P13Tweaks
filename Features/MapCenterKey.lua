@@ -21,7 +21,7 @@ local function ScaleForYards(sc, mapID, yards)
     return scale
 end
 
--- zoomIn: also zoom in close around you (the map's Center button); otherwise keep the zoom.
+-- zoomIn: also zoom in close around you (middle-click); otherwise keep the zoom.
 local function CentreOnPlayer(zoomIn)
     if not WorldMapFrame:IsShown() then return end
     local sc = WorldMapFrame.ScrollContainer
@@ -64,38 +64,4 @@ ns:RegisterOption({
     default = true,
 })
 
-ns:RegisterOption({
-    key = "mapCenterButton",
-    type = "toggle",
-    label = "Center button on the world map",
-    tooltip = "A Center button in the bottom-left corner of the world map: switches to your zone, centres on you and zooms in close.",
-    default = true,
-    onChange = function(v)
-        if ns.mapCenterButton then ns.mapCenterButton:SetShown(v and true or false) end
-    end,
-})
-
-local events = CreateFrame("Frame")
-events:RegisterEvent("PLAYER_LOGIN")
-events:SetScript("OnEvent", function()
-    P13TweaksDB.mapCenterKey = nil   -- removed option (F to centre)
-
-    local sc = WorldMapFrame and WorldMapFrame.ScrollContainer
-    if not sc then return end
-    -- second in the bottom-left button row (Core.lua), after the terrain/painted button
-    local button = CreateFrame("Button", nil, sc, "UIPanelButtonTemplate")
-    button:SetSize(70, 22)
-    button:SetText("Center")
-    button:SetFrameLevel(sc:GetFrameLevel() + 100)
-    button:SetScript("OnClick", function() CentreOnPlayer(true) end)
-    button:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT")
-        GameTooltip:SetText("Center on me")
-        GameTooltip:AddLine("Switches to your zone, centres on you and zooms in close.", 1, 1, 1, true)
-        GameTooltip:Show()
-    end)
-    button:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    button:SetShown(ns:Get("mapCenterButton") and true or false)
-    ns.mapCenterButton = button
-    ns:AddMapButton(button, 20)
-end)
+-- (The Center button on the map was removed: middle-click does the same.)

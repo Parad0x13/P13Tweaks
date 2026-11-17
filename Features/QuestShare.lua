@@ -30,6 +30,8 @@ local myQuests = {}   -- my own quest log, same shape (plus .header)
 ns.HasQuest = function(id) return myQuests[id] ~= nil end   -- used by QuestWhere.lua
 local lastSent = {}   -- id -> the message we last sent for that quest
 local warned = {}     -- name -> true once we've said their P13Tweaks is a different version
+-- Counters for /p13 questsdebug (to spot a sync that keeps repeating).
+local stats = { hello = 0, full = 0, apply = 0, newcomer = 0, msg = {} }
 local seen = {}       -- id -> title: every quest anyone in the group has had in their log
 local sentDone = {}   -- id -> true once I've told the group I finished it
 local RefreshWindow   -- set further down
@@ -247,6 +249,7 @@ end
 
 local function SendFull()
     if not (Sharing() and Channel()) then return end
+    stats.full = stats.full + 1
     -- The full list replaces any quest messages still waiting to go out.
     for i = #queue, 1, -1 do
         if queue[i]:find("^[QRCDPE]") then table.remove(queue, i) end
@@ -261,7 +264,7 @@ local function SendFull()
 end
 
 local function SayHello()
-    if Sharing() then Send("H^" .. PROTOCOL .. "^" .. ns.version) end
+    if Sharing() then stats.hello = stats.hello + 1; Send("H^" .. PROTOCOL .. "^" .. ns.version) end
 end
 
 ---------------------------------------------------------------------------
@@ -271,6 +274,35 @@ end
 local function ShortName(sender)
     if Ambiguate then return Ambiguate(sender, "none") end
     return sender
+end
+
+-- Is this name me? Handles "Name-Realm" too (my own messages come back to me, and on a connected
+-- realm they can carry the realm, which would otherwise list me as one of my own teammates).
+local function Norm(s) return (tostring(s or ""):lower():gsub("[%s%-'_]", "")) end
+
+local function IsMe(name)
+    if not name or name == "" then return false end
+    local me = UnitName("player") or ""
+    if name == me or name:match("^([^%-]+)") == me then return true end
+    local n, m = Norm(name), Norm(me)
+    if m == "" then return false end
+    if n == m then return true end
+    if GetUnitName and n == Norm(GetUnitName("player", true)) then return true end
+    -- "Name" followed by (part of) my realm name, however the game spelled the separator or cut it short
+    local realm = Norm((GetNormalizedRealmName and GetNormalizedRealmName()) or (GetRealmName and GetRealmName()))
+    if n:sub(1, #m) == m then
+        local rest = n:sub(#m + 1)
+        if rest == "" or (realm ~= "" and realm:sub(1, #rest) == rest) then return true end
+    end
+    return false
+end
+
+-- How my own name looks when my messages come back to me (this client can show a longer name than
+-- UnitName gives, e.g. "Skade Stormr" for "Skade"). Learned from the first echo; used wherever my name is shown.
+local myNetName
+local function MyName()
+    local n = myNetName or UnitName("player") or "?"
+    return (n:gsub("%-", " "))
 end
 
 -- Full lists that are still arriving: who -> { m = the new member data, complete = true once their "E" came }.
@@ -297,6 +329,7 @@ end
 
 ApplyIncoming = function()
     if next(incoming) == nil then return end
+    stats.apply = stats.apply + 1
     for who, p in pairs(incoming) do
         local old = members[who]
         if old and old.heard then p.m.heard = math.max(p.m.heard or 0, old.heard) end
@@ -305,6 +338,22 @@ ApplyIncoming = function()
     end
     syncWait = 0
     RefreshWindow()
+end
+
+-- Teammates on a P13Tweaks older than 0.6.2 never send the end-of-list marker. Treat a list as
+-- complete once nothing more has arrived from that teammate for 3 seconds (the sender's messages
+-- come at most ~1.1 s apart), so they don't hold everyone up until the long timeout.
+local CheckQuiet
+CheckQuiet = function()
+    local now = GetTime()
+    local stillWaiting = false
+    for _, p in pairs(incoming) do
+        if not p.complete then
+            if now - (p.last or 0) >= 3 then p.complete = true else stillWaiting = true end
+        end
+    end
+    if stillWaiting then Later("quiet", 1, CheckQuiet) end
+    TryApply()
 end
 
 -- Says so once if a teammate's P13Tweaks is a different version from mine.
@@ -317,8 +366,12 @@ end
 local function OnMessage(msg, sender)
     if not Sharing() then return end
     local who = ShortName(sender)
-    if who == UnitName("player") then return end
+    if IsMe(who) or IsMe(sender) then
+        if not myNetName or #who > #myNetName then myNetName = who end   -- learn how my name is spelled
+        return
+    end
     local kind = msg:sub(1, 1)
+    stats.msg[kind] = (stats.msg[kind] or 0) + 1
     local m = members[who]
     if kind == "H" then
         local proto = tonumber(msg:match("^H%^(%d+)"))
@@ -379,7 +432,11 @@ local function OnMessage(msg, sender)
     end
     local now = GetTime()   -- for "Ask again": did they answer?
     if members[who] then members[who].heard = now end
-    if incoming[who] then incoming[who].m.heard = now end
+    if incoming[who] then
+        incoming[who].m.heard = now
+        incoming[who].last = now
+        Later("quiet", 3.2, CheckQuiet)   -- an older P13Tweaks never says "end of list"
+    end
     -- While a list is still arriving the window waits; it refreshes once, when everything has landed.
     if next(incoming) == nil then Later("window", 0.2, function() RefreshWindow() end) end
 end
@@ -396,11 +453,46 @@ local function GroupNames()
     for i = 1, (GetNumGroupMembers() or 0) do
         local unit = raid and ("raid" .. i) or ("party" .. i)
         if UnitExists(unit) and not UnitIsUnit(unit, "player") then
-            local name, realm = UnitName(unit)
-            if name then t[(realm and realm ~= "") and (name .. "-" .. realm) or name] = true end
+            -- Just the name, never "Name-Realm": the realm part can appear and disappear between calls
+            -- (it loads late), which used to look like people joining and leaving over and over.
+            local name = UnitName(unit)
+            if name then t[name] = true end
         end
     end
     return t
+end
+
+-- Does a stored teammate name (however it was spelled: "Ann", "Ann-Realm", "Ann Realm") belong to someone in the group now?
+local function KeyInGroup(key)
+    local k = Norm(key)
+    local myRealm = Norm((GetNormalizedRealmName and GetNormalizedRealmName()) or (GetRealmName and GetRealmName()))
+    local raid = IsInRaid()
+    for i = 1, (GetNumGroupMembers() or 0) do
+        local unit = raid and ("raid" .. i) or ("party" .. i)
+        if UnitExists(unit) and not UnitIsUnit(unit, "player") then
+            local name, realm = UnitName(unit)
+            local n = Norm(name)
+            if n ~= "" then
+                local r = (realm and realm ~= "") and Norm(realm) or myRealm
+                if k == n or k == n .. r then return true end
+                if k:sub(1, #n) == n then
+                    local rest = k:sub(#n + 1)
+                    if rest ~= "" and r:sub(1, #rest) == rest then return true end
+                end
+            end
+        end
+    end
+    return false
+end
+
+-- The stored data for a group member by their plain name, whichever way it was keyed.
+local function FindMember(name)
+    if members[name] then return members[name], name end
+    local n = Norm(name)
+    for key, m in pairs(members) do
+        local k = Norm(key)
+        if k == n or k:sub(1, #n) == n then return m, key end
+    end
 end
 
 local function OnRoster()
@@ -412,15 +504,16 @@ local function OnRoster()
     end
     local now = GroupNames()
     for name, m in pairs(members) do
-        if not m.demo and not now[name] then members[name] = nil end   -- left the group
+        if not m.demo and not KeyInGroup(name) then members[name] = nil end   -- left the group
     end
     for name in pairs(incoming) do
-        if not now[name] then incoming[name] = nil end
+        if not KeyInGroup(name) then incoming[name] = nil end
     end
     local someoneNew = false
     for name in pairs(now) do if not roster[name] then someoneNew = true end end
     roster = now
     if someoneNew then
+        stats.newcomer = stats.newcomer + 1
         StartSync()
         SayHello()                  -- everyone with P13Tweaks answers with their list...
         Later("full", 3, SendFull)  -- ...and they get mine
@@ -556,23 +649,27 @@ local function AskAgain()
     RefreshWindow()
     SayHello()
     ns:Print("Asking your group...")
-    C_Timer.After(6, function()
+    C_Timer.After(9, function()   -- their list starts ~2 s after I ask; an older P13Tweaks is applied ~3 s after its last message
         local names = {}
         for name in pairs(GroupNames()) do table.insert(names, name) end
         table.sort(names)
         local lines = {}
         for _, name in ipairs(names) do
-            local m = members[name]
+            local m = FindMember(name)   -- stored under whichever spelling their messages used
             local line
             if m and m.heard and m.heard >= t0 then
                 local n = 0
                 for _ in pairs(m.quests) do n = n + 1 end
                 line = ("|cff40ff40updated|r - %d quest%s%s"):format(n, n == 1 and "" or "s", VerTag(m.version))
-                if m.version and m.version ~= ns.version then line = line .. " |cffff6040(different version)|r" end
+                if not m.version then
+                    line = line .. " |cffff6040(older P13Tweaks - update it for the newest features)|r"
+                elseif m.version ~= ns.version then
+                    line = line .. " |cffff6040(different version)|r"
+                end
             elseif m then
                 line = "|cffffd200no answer|r - still showing what they sent before"
             else
-                line = "|cffff6040no P13Tweaks|r (or their quest sharing is off)"
+                line = "|cffff6040no answer|r - no P13Tweaks, quest sharing turned off, or a version from before quest sharing"
             end
             table.insert(lines, NameColor(name) .. name .. "|r: " .. line)
         end
@@ -581,6 +678,36 @@ local function AskAgain()
         for _, l in ipairs(lines) do ns:Print(l) end
         RefreshWindow()
     end)
+end
+
+-- Tracks one of my quests in the game (objective tracker + the highlighted tracked quest).
+local function SelectInGame(id)
+    if not myQuests[id] then ns:Print("That quest isn't in your quest log."); return end
+    local index
+    for i = 1, NumEntries() do
+        local _, isHeader, _, _, qid = Entry(i)
+        if not isHeader and qid == id then index = i; break end
+    end
+    -- Track it (no quest log or map window is opened): put it on the objective tracker, and make it
+    -- THE tracked quest (the highlighted one) where the game has that.
+    local done = false
+    if C_QuestLog and C_QuestLog.AddQuestWatch then
+        pcall(C_QuestLog.AddQuestWatch, id)
+        done = true
+    elseif AddQuestWatch and index then
+        pcall(AddQuestWatch, index)
+        if QuestWatch_Update then pcall(QuestWatch_Update) end
+        done = true
+    end
+    if C_SuperTrack and C_SuperTrack.SetSuperTrackedQuestID then
+        pcall(C_SuperTrack.SetSuperTrackedQuestID, id)
+        done = true
+    end
+    if done then
+        ns:Print("Tracking: " .. (myQuests[id].title or "quest"))
+    else
+        ns:Print("Couldn't track it - its zone may be collapsed in your quest log. Expand it and try again.")
+    end
 end
 
 local function QuestButton(i)
@@ -593,14 +720,25 @@ local function QuestButton(i)
             ns.ShowQuestGuide(self.guide, self.guideTitle, self.guideWho and { forName = self.guideWho } or nil)
             return
         end
+        -- one of my quests: show it in my quest log; Shift-click (or a "Share these" line) shares it instead
+        if not (self.share or IsShiftKeyDown()) then
+            SelectInGame(self.questId)
+            return
+        end
         local ok, why = PushQuest(self.questId)
         if ok then ns:Print("Shared \"" .. (myQuests[self.questId] and myQuests[self.questId].title or "quest") .. "\" with your group.")
         else ns:Print("Couldn't share it: " .. why .. ".") end
     end)
     b:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText(self.guide and (self.guideWho and "Click to see where this quest starts" or "Click to see how to get this quest")
-            or "Click to share this quest with your group", 1, 1, 1)
+        if self.guide then
+            GameTooltip:SetText(self.guideWho and "Click to see where this quest starts" or "Click to see how to get this quest", 1, 1, 1)
+        elseif self.share then
+            GameTooltip:SetText("Click to share this quest with your group", 1, 1, 1)
+        else
+            GameTooltip:SetText("Click to track this quest", 1, 1, 1)
+            GameTooltip:AddLine("Shift-click to share it with your group", 0.8, 0.8, 0.8)
+        end
         GameTooltip:Show()
     end)
     b:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -730,6 +868,23 @@ local function Summary(q)
     return table.concat(parts, ", ")
 end
 
+-- First line of the by-quest and sync-plan views: everyone in the group who shares quests, each once
+-- (you first, then teammates alphabetically), with their P13Tweaks version.
+local function PlayersLine(out, names)
+    local seenName, parts = {}, {}
+    local function Add(name, label)
+        if not seenName[name] then seenName[name] = true; parts[#parts + 1] = label end
+    end
+    local me = UnitName("player") or "?"
+    Add(me, NameColor("player") .. MyName() .. "|r" .. VerTag(ns.version))
+    for _, name in ipairs(names) do
+        if not IsMe(name) then
+            Add(name, NameColor(name) .. name .. "|r" .. VerTag(members[name] and members[name].version))
+        end
+    end
+    table.insert(out, { "|cff808080Players:|r " .. table.concat(parts, "   "), 0, 0 })
+end
+
 -- By quest: every quest anyone has, with each player's place on it - including players who haven't started it.
 local function BuildByQuest(out)
     local players = {}
@@ -746,6 +901,7 @@ local function BuildByQuest(out)
             isDone = function(id) return m.done and m.done[id] end })
     end
     if #names == 0 then return end
+    PlayersLine(out, names)
 
     local ids, title = {}, {}
     for _, p in ipairs(players) do
@@ -756,9 +912,9 @@ local function BuildByQuest(out)
     table.sort(ids, function(a, b) return title[a] < title[b] end)
 
     local missing = {}
-    for name in pairs(GroupNames()) do if not members[name] then table.insert(missing, name) end end
+    for name in pairs(GroupNames()) do if not FindMember(name) then table.insert(missing, name) end end
     table.sort(missing)
-    table.insert(out, { "|cff808080Click one of your quests to share it; click one you don't have to see how to get it.|r", 0, 2 })
+    table.insert(out, { "|cff808080Click one of your quests to track it (Shift-click shares it); click one you don't have to see how to get it.|r", 0, 2 })
     if #missing > 0 then
         table.insert(out, { "|cff808080No P13Tweaks (can't be shown): " .. table.concat(missing, ", ") .. "|r", 0, 2 })
     end
@@ -794,7 +950,7 @@ local function BuildByPlayer(out)
             if q.state == 1 then t = t .. " |cff40ff40(ready to turn in)|r"
             elseif q.state == -1 then t = t .. " |cffff4040(failed)|r" end
             if myQuests[e.id] and not m.demo then t = t .. " |cff8fa8ff(you have it too)|r" end
-            table.insert(out, { t, 12, 4, guide = (not myQuests[e.id]) and e.id or nil })
+            table.insert(out, { t, 12, 4, myQuests[e.id] and e.id or nil, guide = (not myQuests[e.id]) and e.id or nil })
             if q.state ~= 1 then
                 for _, o in ipairs(q.objs) do
                     table.insert(out, { (o[2] and "|cff808080" or "|cffffffff") .. o[1] .. "|r", 26, 1 })
@@ -915,7 +1071,7 @@ local function BuildCompare(out)
     if shown == 0 then
         table.insert(out, { "|cff808080(everyone is in the same place on every quest)|r", 0, 8 })
     end
-    table.insert(out, { "|cff808080green = furthest along, amber = behind, - = not started. Click one of your quests to share it, or one you don't have to see how to get it.|r", 0, 10 })
+    table.insert(out, { "|cff808080green = furthest along, amber = behind, - = not started. Click one of your quests to track it (Shift-click shares it), or one you don't have to see how to get it.|r", 0, 10 })
 end
 
 -- Sync plan: what to do so everyone ends up on the same quests, as short click-through lists.
@@ -928,6 +1084,7 @@ local function BuildPlan(out)
     for name in pairs(members) do table.insert(names, name) end
     table.sort(names)
     if #names == 0 then return end
+    PlayersLine(out, names)
 
     local players = { { me = true, quests = myQuests, isDone = Completed } }
     for _, name in ipairs(names) do
@@ -936,8 +1093,7 @@ local function BuildPlan(out)
             isDone = function(id) return m.done and m.done[id] end })
     end
     -- your own character name (in your class colour) is used wherever the plan refers to you
-    local myName = UnitName("player") or "?"
-    local myLabel = NameColor("player") .. myName .. "|r"
+    local myLabel = NameColor("player") .. MyName() .. "|r"
     local function Label(p) return p.me and myLabel or (NameColor(p.name) .. p.name .. "|r") end
     local function Labels(list)
         local t = {}
@@ -1013,7 +1169,7 @@ local function BuildPlan(out)
         end
 
         if mine and #canMates > 0 then
-            table.insert(share, { head .. " |cff808080->|r " .. Labels(canMates), id = id })
+            table.insert(share, { head .. " |cff808080->|r " .. Labels(canMates), id = id, share = true })
         end
         if meLacks and #holdMates > 0 then
             if #myWhy == 0 then
@@ -1041,7 +1197,7 @@ local function BuildPlan(out)
                     table.insert(subs, Label(p) .. (isBehind and " |cffffa040" or " |cff40ff40") .. info[p].text .. "|r"
                         .. (isBehind and " |cff808080(behind)|r" or " |cff808080(ahead)|r"))
                 end
-                table.insert(catchUp, { head, sub = subs })
+                table.insert(catchUp, { head, sub = subs, id = mine and id or nil })   -- click = show it in my quest log
             end
         end
     end
@@ -1050,7 +1206,7 @@ local function BuildPlan(out)
         if #list == 0 then return false end
         table.insert(out, { titleText, 0, gap })
         for _, e in ipairs(list) do
-            table.insert(out, { e[1], 8, 3, e.id, guide = e.guide })
+            table.insert(out, { e[1], 8, 3, e.id, guide = e.guide, shareOnClick = e.share })
             for _, s in ipairs(e.sub or {}) do
                 if type(s) == "table" then   -- a clickable line: opens where quest s.guide starts
                     table.insert(out, { s.text, s.indent or 24, 1, guide = s.guide, guideWho = s.who })
@@ -1071,7 +1227,7 @@ local function BuildPlan(out)
         table.insert(out, { "|cff40ff40Everyone is on the same quests at the same point - nothing to do.|r", 0, 0 })
     end
     local missing = {}
-    for name in pairs(GroupNames()) do if not members[name] then table.insert(missing, name) end end
+    for name in pairs(GroupNames()) do if not FindMember(name) then table.insert(missing, name) end end
     table.sort(missing)
     if #missing > 0 then
         table.insert(out, { "|cff808080No P13Tweaks (can't be compared): " .. table.concat(missing, ", ") .. "|r", 0, 12 })
@@ -1152,6 +1308,7 @@ RefreshWindow = function()
             nb = nb + 1
             local b = QuestButton(nb)
             b.questId = e[4]
+            b.share = e.shareOnClick
             b.guide = guide
             b.guideWho = guide and e.guideWho or nil   -- set when someone else needs that quest first
             b.guideTitle =guide and (e[1]:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r.*$", "")) or nil
@@ -1286,7 +1443,25 @@ ns:RegisterCommand("quests", "show your teammates' quests and progress", functio
     ToggleWindow()
 end)
 
-ns:RegisterCommand("version", "show your P13Tweaks version and your teammates'", function()
+ns:RegisterCommand("questsdebug", "show how the addon sees your name and your teammates' names (for duplicate-name problems)", function()
+    ns:Print(("UnitName: \"%s\" | GetUnitName: \"%s\" | realm: \"%s\" / \"%s\""):format(
+        tostring(UnitName("player")), tostring(GetUnitName and GetUnitName("player", true)),
+        tostring(GetRealmName and GetRealmName()), tostring(GetNormalizedRealmName and GetNormalizedRealmName())))
+    local any = false
+    for name, m in pairs(members) do
+        any = true
+        ns:Print(("teammate \"%s\"%s%s"):format(name, IsMe(name) and " (this is ME - should have been ignored)" or "",
+            m.demo and " (pretend)" or ""))
+    end
+    if not any then ns:Print("No teammates stored.") end
+    local kinds = {}
+    for k, n in pairs(stats.msg) do kinds[#kinds + 1] = k .. "=" .. n end
+    table.sort(kinds)
+    ns:Print(("how my name looks to others: \"%s\" | hellos sent %d | full lists sent %d | lists applied %d | newcomers seen %d | messages received: %s"):format(
+        tostring(myNetName), stats.hello, stats.full, stats.apply, stats.newcomer, #kinds > 0 and table.concat(kinds, " ") or "none"))
+end)
+
+ns:RegisterCommand("version","show your P13Tweaks version and your teammates'", function()
     ns:Print("you have v" .. ns.version)
     for name, m in pairs(members) do
         if not m.demo then
