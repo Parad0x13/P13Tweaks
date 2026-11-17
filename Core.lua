@@ -48,6 +48,7 @@ events:SetScript("OnEvent", function(self, event, arg1)
         P13TweaksDB.priorityTarget, P13TweaksDB.priorityTargetQuestInfo = nil, nil  -- removed quest target key
         P13TweaksDB.priorityTargetNames, P13TweaksDB.priorityTargetQuests = nil, nil
         P13TweaksDB.tileTestLog, P13TweaksDB.flightDebugLog, P13TweaksDB.taxiDebug = nil, nil, nil  -- removed test/debug logs
+        P13TweaksDB.mapDragLog = nil
         P13TweaksDB.fishMap, P13TweaksDB.fishMapView, P13TweaksDB.fishLog = nil, nil, nil  -- removed fishing map
         for _, def in ipairs(ns.options) do
             if P13TweaksDB[def.key] == nil then

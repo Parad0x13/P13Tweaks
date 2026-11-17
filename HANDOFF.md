@@ -1,4 +1,4 @@
-# P13Tweaks – Handoff (2026-11-16, late)
+# P13Tweaks – Handoff (2026-11-17)
 
 ## What this is
 Personal quality-of-life addon for **WoW Forever** (`P13Tweaks.toc`, interface 16001) and
@@ -15,6 +15,19 @@ Personal quality-of-life addon for **WoW Forever** (`P13Tweaks.toc`, interface 1
   tested in game** except where the user reported results.
 - Adding/removing a file in a `.toc` needs a **full game restart**; other changes need only `/reload`.
 
+## 2026-11-17 – untested in game (all need a full restart: new file in the .toc)
+- **Options window redesign** (`Options.lua`): tabbed sidebar + section headings, dark flat look.
+  Tab icons are unverified on Forever (a missing one shows blank/green).
+- **AggroRange** (new): target aggro gauge + chimes. Uses `ns.UnitDistanceBand` from RangeBeep
+  (whose `CheckAt` now takes a unit and skips secret values).
+- **MapSeamless**: dragging ~40 px past a zone map's edge hands over to the continent at the same
+  zoom/spot (`CheckEdgePush`). Diagnosed from a debug log: the "stuck drag" was the zone edge.
+  Unknown whether the drag continues through the map switch.
+- **ProfCap**: "Mark closest Mailbox" in the portrait menu (`/p13 mail`), mailboxes from QuestieDB
+  objects named "Mailbox".
+- Fishing sounds question: same answer as below (SFX channel can't be split; `MuteSoundFile` offered).
+- Aggro **nameplate** colouring was offered and deferred by the user ("not for now").
+
 ## 2026-11-16 (from a Trad0x session) – code committed in 885c94e
 - `Features/FishKey.lua`: "Louder splash while fishing" now also sets `Sound_DialogVolume` 0 and
   turns off `Sound_EnableEmoteSounds`, `Sound_EnablePetSounds` and `Sound_EnableErrorSpeech` while
@@ -29,6 +42,9 @@ Personal quality-of-life addon for **WoW Forever** (`P13Tweaks.toc`, interface 1
 - `Options.lua`: option types `toggle`, `toggleNumber`, `toggleText`, `toggleSlider`, `toggleButton`,
   `text`, `info`. Inline extras: `before`, `after`, `boxWidth`, `upper`, `maxLetters`, `snap`,
   `min/max/step/format/sliderWidth`, `buttonText/buttonWidth/onClick`.
+  The window has a sidebar of tabs (Map, Combat, Quests, Towns, Professions, Chat & keys), each with
+  section headings. **A new option must be added to `LAYOUT` at the top of Options.lua** (tab, section);
+  one that isn't listed still shows, in an "Other" tab. Last tab opened is saved as `optionsTab`.
 - `Features/*.lua`: one feature per file, each registers its own options and commands.
 
 ## Features (load order in the .toc)
@@ -40,8 +56,9 @@ Personal quality-of-life addon for **WoW Forever** (`P13Tweaks.toc`, interface 1
 | MapMemory | map reopens where you left it | |
 | MapMiddleClick + MapCenterKey | middle-click the map or its **Center** button (option `mapCenterButton`): centre on yourself and zoom in to ~800 yards across. Map buttons sit in a bottom-left row laid out by `ns:AddMapButton(button, order)` in Core.lua (terrain toggle 10, Center 20) | |
 | InteractIcons | floating interact icons on nearby objects (soft-target CVars) | |
-| RangeBeep | beep when target is **X yards** (typed; snapped to the nearest checkable range) | `range`, `dot` |
-| ProfCap | notice when a profession is at/near its cap; click a row = waypoint to nearest trainer; **right-click your own portrait → "Mark closest Class Trainer" / "Vendor (to sell)" (nearest NPC with the vendor flag, key `VENDOR`; replaced "Repair (anvil)", which replaced "General Goods" – both still `/p13 repair` / `/p13 goods`) / "Auction House" (nearest auctioneer, key `AUCTION`) / "Weapon Master" (submenu per weapon; hardcoded `WEAPON_TEACHERS` by NPC name; pre-Cata clients only) / one "Mark closest <Profession> Trainer" per profession (icon, rank-aware via `GuideTo(p)`, list rebuilt each time the menu opens; only professions in `PROF_WORDS`)** | `prof [name\|reset]`, `trainer`, `goods`, `repair`, `sell`, `ah`, `weapon [weapon]` |
+| RangeBeep | beep when target is **X yards** (typed; snapped to the nearest checkable range). Exports `ns.UnitDistanceBand(unit, maxYd)` | `range`, `dot` |
+| AggroRange | gauge for a hostile, not-yet-fighting target: estimated aggro radius (20 yd ± 1 per level difference, 5–45) red, 5 yd warning yellow, your distance band white; chime near the edge, double chime inside. Draggable (`aggroRangePos`) | `aggro` |
+| ProfCap | notice when a profession is at/near its cap; click a row = waypoint to nearest trainer; **right-click your own portrait → "Mark closest Class Trainer" / "Vendor (to sell)" / "Mailbox" (QuestieDB objects named "Mailbox", key `MAILBOX`, any faction) (nearest NPC with the vendor flag, key `VENDOR`; replaced "Repair (anvil)", which replaced "General Goods" – both still `/p13 repair` / `/p13 goods`) / "Auction House" (nearest auctioneer, key `AUCTION`) / "Weapon Master" (submenu per weapon; hardcoded `WEAPON_TEACHERS` by NPC name; pre-Cata clients only) / one "Mark closest <Profession> Trainer" per profession (icon, rank-aware via `GuideTo(p)`, list rebuilt each time the menu opens; only professions in `PROF_WORDS`)** | `prof [name\|reset]`, `trainer`, `goods`, `repair`, `sell`, `mail`, `ah`, `weapon [weapon]` |
 | MinimapTownsfolk | bank / auction house / anvil (repair) icons on the minimap. Uses the game's own tracking (`MINIMAP_TRACKING_BANKER/AUCTIONEER/REPAIR`) when it exists (MoP); otherwise own pins via Questie's HereBeDragons-Pins, NPCs from ProfCap's QuestieDB scan (`ns.GetTownNpcs("BANK"/"AUCTION"/"REPAIR")`, matched on `LibQuestieDB.Enum.npcFlags` or title). Option `minimapTownsfolk`; `worldmapTownsfolk` = same icons on the world map, now drawn on our own layer in `ScrollContainer.Child` (like FlightPoints; no HBD – the HBD world pins weren't showing for the user), on zone/city maps only (each icon converted through world coords to whatever zone map is open, cached per map). World map needs only QuestieDB; own minimap pins still need Questie's HBD. Pin frames pooled. Errors reported in chat (pcall) | `townsfolk` (rebuild + counts) |
 | FlightPoints | every flight point (own faction + neutral) on the world map, drawn on its own layer in `ScrollContainer.Child` (no Questie/HBD needed; positions converted through world coords so they show on the continent and its zone maps): white + green tick = unlocked, red + red cross = not unlocked, grey + ? = unknown (ready-check textures as badges, dark disc behind each icon). Positions from `C_TaxiMap.GetTaxiNodesForMap(continent)` (fallback: QuestieDB `FLIGHT` flight masters, no status). Known state learned on `TAXIMAP_OPENED` (`TaxiNodeGetType` CURRENT/REACHABLE) into `P13TweaksDB.knownFlights[char] = {names, continents}`; a continent counts as checked once its taxi map was seen. **On Forever only CURRENT/REACHABLE are yours; DISTANT = not unlocked** (verified from a log: a level-11 char's Everlook etc. are DISTANT with hidden buttons). Each taxi visit sets every listed node known/unknown, so stale entries self-correct. Option `flightPoints`. **Flight master's map** (classic `TaxiFrame`, option `flightPointsTaxi`): the taxi map lists every node of the continent; non-CURRENT/REACHABLE ones in our faction-filtered C_TaxiMap list get red-cross icons (name tooltip, not clickable) at `TaxiNodePosition` measured from the **top-left** of `TaxiRouteMap` (matches the game's `TaxiButton<i>` centres exactly). Druid-only "Nighthaven, Moonglade" isn't on the taxi map | `flights` |
 | MapRoute | **double-click** the world map (two left mouse-downs ≤0.4 s, ≤12 px apart; uses the FIRST click's map + spot, since a continent click opens the zone) → route: straight walk vs walk → unlocked flight master → fly → walk (cost: distance / speed; speed = mount speed seen while `IsMounted()` per char in `P13TweaksDB.routeMountSpeed`, else 7 yd/s; flight 30 yd/s × 1.25 detour + 25 s). Flights from `C_TaxiMap.GetTaxiNodesForMap(continent)` filtered by `ns.IsFlightKnown` (FlightPoints), all assumed connected. Drawn with `CreateLine` on a layer in `ScrollContainer.Child` (dashed yellow walk, solid blue fly, raid-star destination); world↔map via each map's `GetWorldPosFromMapPos` corners. Game waypoint + supertrack on the next stop; re-plans on landing (`UnitOnTaxi` false) / `PLAYER_CONTROL_GAINED` / new zone; clears within 25 yd. "Clear route" map button (order 25). Option `mapRoute` | `route [clear]` |

@@ -16,6 +16,7 @@ Features\MapMiddleClick.lua
 Features\MapCenterKey.lua
 Features\InteractIcons.lua
 Features\RangeBeep.lua
+Features\AggroRange.lua
 Features\ProfCap.lua
 Features\MinimapTownsfolk.lua
 Features\FlightPoints.lua

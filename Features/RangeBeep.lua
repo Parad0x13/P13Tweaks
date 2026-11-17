@@ -65,20 +65,39 @@ local function BuildTryOrder()
     end)
 end
 
-local function CheckAt(yd)
+local function CheckAt(yd, unit)
+    unit = unit or "target"
     local how = RANGE_ITEMS[yd]
     if how == "follow" then
         if CheckInteractDistance then
-            local ok, r = pcall(CheckInteractDistance, "target", 4)
-            if ok and r ~= nil then return r and true or false, "follow range check" end
+            local ok, r = pcall(CheckInteractDistance, unit, 4)
+            if ok and r ~= nil and not (issecretvalue and issecretvalue(r)) then
+                return r and true or false, "follow range check"
+            end
         end
     elseif IsItemInRange then
         for _, id in ipairs(how) do
-            local ok, r = pcall(IsItemInRange, id, "target")
-            if ok and r ~= nil then return r and true or false, "item " .. id end
+            local ok, r = pcall(IsItemInRange, id, unit)
+            if ok and r ~= nil and not (issecretvalue and issecretvalue(r)) then
+                return r and true or false, "item " .. id
+            end
         end
     end
     return nil
+end
+
+-- For other features (AggroRange.lua): roughly how far away `unit` is, as a band.
+-- Returns lo, hi: farther than lo yards and within hi yards. lo = 0 when it's within the
+-- closest checkable distance; hi = nil when it's beyond maxYd (or no check answered).
+function ns.UnitDistanceBand(unit, maxYd)
+    local lo, any = 0, false
+    for _, yd in ipairs(DISTANCES) do
+        if maxYd and yd > maxYd then break end
+        local r = CheckAt(yd, unit)
+        if r == true then return lo, yd end
+        if r == false then lo, any = yd, true end
+    end
+    if any then return lo, nil end
 end
 
 -- Returns true = within range, false = farther, nil = can't tell right now,

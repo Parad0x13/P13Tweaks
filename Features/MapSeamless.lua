@@ -258,6 +258,52 @@ local function ZoomOutToParent(sc)
 end
 
 ---------------------------------------------------------------------------
+-- Dragging past a zone's edge: a zone map ends at its border, so the game won't drag any
+-- further. Keep pushing and we hand over to the continent at the same zoom and spot, and
+-- the drag carries on there.
+---------------------------------------------------------------------------
+
+local EDGE_PUSH_PIXELS = 40   -- how far you have to drag into the edge before it hands over
+local EDGE_EPS = 0.0005
+local pushed, lastCX, lastCY = 0, nil, nil
+
+local function ParentSameView(sc)
+    local mapID = WorldMapFrame:GetMapID()
+    local info = mapID and C_Map.GetMapInfo(mapID)
+    local parent = info and info.parentMapID
+    if not parent or parent == 0 or (Enum.UIMapType and info.mapType < Enum.UIMapType.Zone) then return end
+    local minX, minY, rw, rh = Rect(mapID, parent)
+    if not (minX and Art(mapID) and Art(parent)) then return end
+    local cx, cy = ViewCentre(sc)
+    SwitchTo(parent, ParentScaleFromChild(sc:GetCanvasScale(), mapID, parent), minX + cx * rw, minY + cy * rh)
+    return true
+end
+
+local function CheckEdgePush(sc)
+    local cx, cy = GetCursorPosition()
+    local px, py = lastCX, lastCY
+    lastCX, lastCY = cx, cy
+    local lb = sc.mouseButtonInfo and sc.mouseButtonInfo.LeftButton
+    if not (ns:Get("mapSeamless") and px and lb and lb.down and sc.IsPanning and sc:IsPanning()
+        and sc.targetScrollX and sc.scrollXExtentsMin) then
+        pushed = 0
+        return
+    end
+    -- the game's own sign: dragging the mouse left moves the view right, etc.
+    local dx, dy = px - cx, cy - py
+    local push = 0
+    if dx > 0 and sc.targetScrollX >= sc.scrollXExtentsMax - EDGE_EPS then push = push + dx end
+    if dx < 0 and sc.targetScrollX <= sc.scrollXExtentsMin + EDGE_EPS then push = push - dx end
+    if dy > 0 and sc.targetScrollY >= sc.scrollYExtentsMax - EDGE_EPS then push = push + dy end
+    if dy < 0 and sc.targetScrollY <= sc.scrollYExtentsMin + EDGE_EPS then push = push - dy end
+    pushed = push > 0 and pushed + push / sc:GetEffectiveScale() or 0
+    if pushed >= EDGE_PUSH_PIXELS and GetTime() - lastSwitch >= SWITCH_COOLDOWN then
+        pushed = 0
+        ParentSameView(sc)
+    end
+end
+
+---------------------------------------------------------------------------
 -- Mouse wheel
 ---------------------------------------------------------------------------
 
@@ -308,7 +354,7 @@ ns:RegisterOption({
     key = "mapSeamless",
     type = "toggle",
     label = "Seamless map zoom (world, continent, zone)",
-    tooltip = "Zoom straight through map levels as if they were one map: zooming in on a continent hands over to the zone in the middle of the view, and zooming out of a zone hands over to its continent, at the same scale and spot.",
+    tooltip = "Zoom straight through map levels as if they were one map: zooming in on a continent hands over to the zone in the middle of the view, and zooming out of a zone hands over to its continent, at the same scale and spot. Dragging past the edge of a zone carries on onto the continent map.",
     default = true,
     onChange = function()
         local sc = WorldMapFrame and WorldMapFrame.ScrollContainer
@@ -364,5 +410,6 @@ watcher:SetScript("OnEvent", function()
     poll:SetScript("OnUpdate", function()
         prevTargetScale = sc.targetScale or sc:GetCanvasScale()
         CheckZoomIn()
+        CheckEdgePush(sc)
     end)
 end)
