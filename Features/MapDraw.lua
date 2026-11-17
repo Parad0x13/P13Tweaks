@@ -11,6 +11,7 @@
 --                      each point = 4 characters (two 12-bit numbers, x and y, as base-64 digits)
 --   U^<strokeID>       the sender undid that stroke
 --   X                  the sender cleared all their lines
+--   A                  the sender cleared EVERY line (everyone's) - receivers clear all of theirs too
 local ADDON_NAME, ns = ...
 
 local PREFIX = "P13M"
@@ -29,7 +30,7 @@ local version = 0      -- bumps whenever the drawing changes (so the map redraws
 local nextId = 0
 local drawing = false  -- draw mode on
 local current          -- the stroke being drawn right now
-local layer, catcher, undoBtn, clearBtn
+local layer, catcher, undoBtn, clearBtn, clearAllBtn
 local linePool, linesUsed, lastSig = {}, 0, nil
 
 local function On() return ns:Get("mapDraw") end
@@ -153,10 +154,13 @@ local function Mine() local out = {} for _, s in ipairs(strokes) do if s.owner =
 
 -- Undo and Clear mine show while drawing, and any time you have lines on the map (so you can always clear them).
 UpdateButtons = function()
-    if not (undoBtn and clearBtn) then return end
+    if not (undoBtn and clearBtn and clearAllBtn) then return end
     local want = On() and (drawing or #Mine() > 0) and true or false
     if undoBtn:IsShown() ~= want then undoBtn:SetShown(want) end
     if clearBtn:IsShown() ~= want then clearBtn:SetShown(want) end
+    -- "Clear all" is for any line on the map, whoever drew it
+    local any = On() and #strokes > 0 and true or false
+    if clearAllBtn:IsShown() ~= any then clearAllBtn:SetShown(any) end
 end
 
 local function AddStroke(s)
@@ -205,6 +209,13 @@ local function ClearMine()
     if RemoveWhere(function(s) return s.owner == Me() and not s.demo end) then Send("X") end
 end
 
+-- Every line on the map, whoever drew it - on everyone's map in the group.
+local function ClearAll()
+    RemoveWhere(function() return true end)
+    partial = {}
+    Send("A")
+end
+
 ---------------------------------------------------------------------------
 -- Receiving
 ---------------------------------------------------------------------------
@@ -248,6 +259,10 @@ local function OnMessage(msg, sender)
         if id then RemoveWhere(function(s) return s.owner == who and s.id == id end) end
     elseif kind == "X" then
         RemoveWhere(function(s) return s.owner == who end)
+    elseif kind == "A" then   -- somebody cleared every line, for everyone
+        RemoveWhere(function() return true end)
+        partial = {}
+        ns:Print(who .. " cleared all the map drawings.")
     end
 end
 
@@ -479,10 +494,8 @@ ns:RegisterCommand("mapdraw", "map drawing: /p13 mapdraw clear (your lines), /p1
         ClearMine()
         ns:Print("Your map lines are cleared (your group's copies too).")
     elseif arg == "clear all" then
-        RemoveWhere(function() return true end)
-        ClearMine()
-        Send("X")
-        ns:Print("All map lines are cleared on your map, including your teammates'. They keep their own until they clear them.")
+        ClearAll()
+        ns:Print("Cleared every map drawing, for everyone in your group.")
     elseif arg == "debug" then
         local sc = WorldMapFrame and WorldMapFrame.ScrollContainer
         if not (sc and layer) then ns:Print("The map isn't ready."); return end
@@ -570,6 +583,24 @@ events:SetScript("OnEvent", function(_, event, a1, a2, a3, a4)
         clearBtn:SetScript("OnClick", ClearMine)
         clearBtn:Hide()
         ns:AddMapButton(clearBtn, 32)
+
+        clearAllBtn = CreateFrame("Button", nil, sc, "UIPanelButtonTemplate")
+        clearAllBtn:SetSize(72, 22)
+        clearAllBtn:SetText("Clear all")
+        clearAllBtn:SetFrameLevel(sc:GetFrameLevel() + 100)
+        clearAllBtn:SetScript("OnClick", function()
+            ClearAll()
+            ns:Print("Cleared every map drawing, for everyone in your group.")
+        end)
+        clearAllBtn:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT")
+            GameTooltip:SetText("Clear all drawings")
+            GameTooltip:AddLine("Removes every line on the map, whoever drew it, for everyone in the group.", 1, 1, 1, true)
+            GameTooltip:Show()
+        end)
+        clearAllBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        clearAllBtn:Hide()
+        ns:AddMapButton(clearAllBtn, 33)
 
         local poll = CreateFrame("Frame", nil, WorldMapFrame)
         poll:SetScript("OnUpdate", function() Redraw(false) end)

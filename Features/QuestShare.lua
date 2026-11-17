@@ -10,6 +10,12 @@
 --   Q^<id>^<state>^<title>^<obj>~<obj>...
 --                      one quest; state 1 = ready to turn in, -1 = failed, 0 = in progress;
 --                      each objective starts with + (done) or - (not done)
+--   V^<rec>;<rec>...  (0.9.0+) compact quests, several per message: rec = <id>:<state>:<obj>,<obj>.. with
+--                      obj = + or - (done / not done) plus the count ("3/10") when it has one. No wording.
+--   N^<id>,<id>...     "I don't know the wording of these quests": answered with T for the ones the sender has
+--   T^<id>^<title>^<tpl>~<tpl>   a quest's wording (objective templates use {c} for the count); receivers keep it
+--                      in P13TweaksDB.questText, so only quests nobody has seen before cost a message
+--   (V is only sent when every group member known to run P13Tweaks is on 0.9.0+; otherwise Q, as above)
 --   R^<id>             that quest left my log
 --   X                  I turned sharing off: forget me
 --   D^<id>             I've already finished that quest (sent only for quests someone in the group
@@ -30,6 +36,10 @@ local myQuests = {}   -- my own quest log, same shape (plus .header)
 ns.HasQuest = function(id) return myQuests[id] ~= nil end   -- used by QuestWhere.lua
 local lastSent = {}   -- id -> the message we last sent for that quest
 local warned = {}     -- name -> true once we've said their P13Tweaks is a different version
+local incoming = {}   -- full lists still arriving (see the Receiving section)
+local wanted = {}     -- quest id -> true: a teammate's quest whose title/objective wording I don't have yet
+local askedAt = {}    -- quest id -> when I last asked the group for its wording
+local sentText = {}   -- quest id -> when I last sent its wording to the group
 -- Counters for /p13 questsdebug (to spot a sync that keeps repeating).
 local stats = { hello = 0, full = 0, apply = 0, newcomer = 0, msg = {} }
 local seen = {}       -- id -> title: every quest anyone in the group has had in their log
@@ -152,6 +162,101 @@ local function Decode(msg)
     return tonumber(id), { title = title, state = tonumber(state) or 0, objs = objs }
 end
 
+-- Compact format (protocol "V"): a quest is just its id, state and numbers; the wording (title, "Boars slain: {c}")
+-- is sent once per quest ("T") and remembered, so a full sync is a few messages instead of one per quest.
+--   record = <id>:<state>:<obj>,<obj>...   obj = + or - (done / not done) followed by the count ("3/10"), if it has one
+local cacheAdds = 0
+
+local function TextCache()
+    P13TweaksDB.questText = P13TweaksDB.questText or {}
+    return P13TweaksDB.questText
+end
+
+-- "Boars slain: 3/10" -> template "Boars slain: {c}" and count "3/10" (count is nil if the text has none)
+local function Split(text)
+    local h, n = text:match("(%d+)%s*/%s*(%d+)")
+    if not h then return text, nil end
+    local tpl = text:gsub("%d+%s*/%s*%d+", "{c}", 1)
+    return tpl, h .. "/" .. n
+end
+
+local function EncodeRecord(id, q)
+    local parts = {}
+    for _, o in ipairs(q.objs) do
+        local _, count = Split(o[1])
+        parts[#parts + 1] = (o[2] and "+" or "-") .. (count or "")
+    end
+    return id .. ":" .. q.state .. ":" .. table.concat(parts, ",")
+end
+
+-- The wording of one of my quests, for teammates who don't know it yet.
+local function EncodeText(id, q)
+    local tpls = {}
+    for i, o in ipairs(q.objs) do tpls[i] = Clean((Split(o[1])), 70) end
+    return Cut("T^" .. id .. "^" .. Clean(q.title, 60) .. "^" .. table.concat(tpls, "~"), MAX_MSG)
+end
+
+-- Remember a quest's wording (from an old-format "Q" message, which carries it).
+local function CacheText(id, title, objs)
+    local cache = TextCache()
+    cacheAdds = cacheAdds + 1
+    if cacheAdds >= 500 then
+        cacheAdds = 0
+        local n = 0
+        for _ in pairs(cache) do n = n + 1 end
+        if n > 6000 then wipe(cache) end   -- keep the saved file small
+    end
+    local tpl = {}
+    for i, o in ipairs(objs) do tpl[i] = (Split(o[1])) end
+    cache[id] = { title = title, tpl = tpl }
+end
+
+-- Turns a compact record back into the quest table the windows use. Second result: do we know its wording?
+local function BuildQuest(id, state, objStr)
+    local c = TextCache()[id]
+    local objs, i = {}, 0
+    for tok in (objStr or ""):gmatch("[^,]+") do
+        i = i + 1
+        local done = tok:sub(1, 1) == "+"
+        local count = tok:sub(2)
+        local tpl = c and c.tpl and c.tpl[i]
+        local text
+        if tpl then
+            text = (count ~= "" and (tpl:gsub("{c}", count))) or tpl
+        else
+            text = count ~= "" and count or (done and "done" or "...")
+        end
+        objs[i] = { text, done }
+    end
+    local title = (c and c.title) or (ns.QuestName and ns.QuestName(id)) or ("Quest " .. id)
+    return { title = title, state = state, objs = objs, raw = objStr or "" }, c ~= nil
+end
+
+-- 0.9.0 and later understand the compact format.
+local MODERN = "0.9.0"
+local function VerAtLeast(v, need)
+    if type(v) ~= "string" then return false end
+    local a1, a2, a3 = v:match("^(%d+)%.(%d+)%.(%d+)")
+    local b1, b2, b3 = need:match("^(%d+)%.(%d+)%.(%d+)")
+    if not (a1 and b1) then return false end
+    a1, a2, a3, b1, b2, b3 = tonumber(a1), tonumber(a2), tonumber(a3), tonumber(b1), tonumber(b2), tonumber(b3)
+    if a1 ~= b1 then return a1 > b1 end
+    if a2 ~= b2 then return a2 > b2 end
+    return a3 >= b3
+end
+
+-- Can everyone I know of in the group read the compact format? (If someone's version is older or unknown, I
+-- send the old one-message-per-quest format to everyone, which every version understands.)
+local function Modern()
+    for _, m in pairs(members) do
+        if not m.demo and not VerAtLeast(m.version, MODERN) then return false end
+    end
+    for _, p in pairs(incoming) do
+        if not VerAtLeast(p.m.version, MODERN) then return false end
+    end
+    return true
+end
+
 ---------------------------------------------------------------------------
 -- Sending (queued, so a full quest log never trips the game's message limit)
 ---------------------------------------------------------------------------
@@ -188,6 +293,28 @@ local function Send(msg)
     if #queue > 0 and not ticker then ticker = C_Timer.NewTicker(0.3, Pump) end
 end
 
+-- Sends these quests (ids) of mine: packed several to a message when everyone understands it, else one by one.
+local function SendQuests(ids, quests)
+    if #ids == 0 then return end
+    table.sort(ids)
+    if Modern() then
+        local body, len = {}, 2
+        local function Flush()
+            if #body > 0 then Send("V^" .. table.concat(body, ";")) end
+            body, len = {}, 2
+        end
+        for _, id in ipairs(ids) do
+            local rec = EncodeRecord(id, quests[id])
+            if len + #rec + 1 > MAX_MSG - 2 then Flush() end
+            body[#body + 1] = rec
+            len = len + #rec + 1
+        end
+        Flush()
+    else
+        for _, id in ipairs(ids) do Send(Encode(id, quests[id])) end
+    end
+end
+
 -- Remembers a quest id seen in the group, plus the quests that decide whether someone can take it
 -- (earlier quests in its chain, exclusive ones): everyone then reports those they've finished.
 local function Track(id, title)
@@ -219,10 +346,12 @@ local function UpdateMine()
         if not quests[id] and old.header and collapsed[old.header] then quests[id] = old end
     end
     if Sharing() and Channel() then
+        local changed = {}
         for id, q in pairs(quests) do
-            local m = Encode(id, q)
-            if lastSent[id] ~= m then lastSent[id] = m; Send(m) end
+            local rec = EncodeRecord(id, q)
+            if lastSent[id] ~= rec then lastSent[id] = rec; changed[#changed + 1] = id end
         end
+        SendQuests(changed, quests)
         for id in pairs(lastSent) do
             if not quests[id] then lastSent[id] = nil; Send("R^" .. id) end
         end
@@ -252,7 +381,7 @@ local function SendFull()
     stats.full = stats.full + 1
     -- The full list replaces any quest messages still waiting to go out.
     for i = #queue, 1, -1 do
-        if queue[i]:find("^[QRCDPE]") then table.remove(queue, i) end
+        if queue[i]:find("^[QRCDPEV]") then table.remove(queue, i) end
     end
     wipe(lastSent)
     wipe(sentDone)
@@ -305,9 +434,9 @@ local function MyName()
     return (n:gsub("%-", " "))
 end
 
--- Full lists that are still arriving: who -> { m = the new member data, complete = true once their "E" came }.
+-- Full lists that are still arriving (`incoming`, declared at the top): who -> { m = the new member data,
+-- complete = true once their "E" came and every quest text they needed arrived }.
 -- Nothing is shown from them until every list in progress is complete (or SYNC_TIMEOUT seconds pass).
-local incoming = {}
 local SYNC_TIMEOUT = 12
 local ApplyIncoming
 
@@ -338,6 +467,52 @@ ApplyIncoming = function()
     end
     syncWait = 0
     RefreshWindow()
+end
+
+-- The wording of a quest just arrived: rebuild every stored copy of that quest that was waiting for it,
+-- and let any list that was held up for it finish.
+local function RefreshQuestText(id)
+    local function Rebuild(m)
+        local q = m.quests[id]
+        if q and q.raw then m.quests[id] = (BuildQuest(id, q.state, q.raw)) end
+    end
+    for _, m in pairs(members) do Rebuild(m) end
+    for _, p in pairs(incoming) do
+        Rebuild(p.m)
+        p.need[id] = nil
+        if p.gotE and next(p.need) == nil then p.complete = true end
+    end
+    TryApply()
+    if next(incoming) == nil then Later("window", 0.2, function() RefreshWindow() end) end
+end
+
+-- A teammate's quest whose wording I don't have: remember to ask.
+local function NeedText(who, id)
+    wanted[id] = true
+    if incoming[who] then incoming[who].need[id] = true end
+end
+
+-- Ask the group for the wording of every quest in `wanted` (packed into as few messages as fit).
+local function FlushNeeds()
+    local ids = {}
+    for id in pairs(wanted) do
+        if not askedAt[id] or GetTime() - askedAt[id] > 15 then ids[#ids + 1] = id end
+    end
+    if #ids == 0 then return end
+    table.sort(ids)
+    local batch, len = {}, 2
+    local function Out()
+        if #batch > 0 then Send("N^" .. table.concat(batch, ",")) end
+        batch, len = {}, 2
+    end
+    for _, id in ipairs(ids) do
+        askedAt[id] = GetTime()
+        local s = tostring(id)
+        if len + #s + 1 > MAX_MSG - 2 then Out() end
+        batch[#batch + 1] = s
+        len = len + #s + 1
+    end
+    Out()
 end
 
 -- Teammates on a P13Tweaks older than 0.6.2 never send the end-of-list marker. Treat a list as
@@ -389,13 +564,62 @@ local function OnMessage(msg, sender)
         -- A full list is starting. Collect it on the side and show it only once it's complete
         -- (and everyone else's is), so the window changes once instead of piece by piece.
         local ver = msg:match("^C%^(.+)$") or (m and m.version)
-        incoming[who] = { complete = false,
+        incoming[who] = { complete = false, need = {},
             m = { quests = {}, done = {}, protocol = m and m.protocol, version = ver } }
         CheckVersion(who, ver)
         Later("applyTimeout", SYNC_TIMEOUT, ApplyIncoming)   -- never wait forever on a teammate who doesn't finish
         Later("window", 0.2, function() RefreshWindow() end) -- shows "Syncing..."
     elseif kind == "E" then
-        if incoming[who] then incoming[who].complete = true; TryApply() end
+        local p = incoming[who]
+        if p then
+            p.gotE = true
+            if next(p.need) then
+                FlushNeeds()   -- some quests' wording is unknown: ask, and finish when it arrives (or after 3 s of quiet)
+            else
+                p.complete = true
+                TryApply()
+            end
+        end
+    elseif kind == "V" then
+        -- Compact quests: id:state:objectives, several per message
+        local t = (incoming[who] and incoming[who].m) or m
+        if not t then t = { quests = {} }; members[who] = t end
+        t.done = t.done or {}
+        for rec in msg:sub(3):gmatch("[^;]+") do
+            local sid, state, objs = rec:match("^(%d+):(%-?%d+):(.*)$")
+            if sid then
+                local id = tonumber(sid)
+                local q, known = BuildQuest(id, tonumber(state) or 0, objs)
+                t.quests[id] = q
+                t.done[id] = nil
+                Track(id, q.title)
+                if not known then NeedText(who, id) end
+            end
+        end
+        if not incoming[who] and next(wanted) then Later("needtext", 0.5, FlushNeeds) end
+        Later("done", 2, function() ReportDone() end)
+    elseif kind == "N" then
+        -- A teammate doesn't know the wording of these quests: send it for the ones I have
+        local sent = 0
+        for sid in msg:sub(3):gmatch("%d+") do
+            local id = tonumber(sid)
+            local q = myQuests[id]
+            if q and sent < 30 and (not sentText[id] or GetTime() - sentText[id] > 20) then
+                sentText[id] = GetTime()
+                sent = sent + 1
+                Send(EncodeText(id, q))
+            end
+        end
+    elseif kind == "T" then
+        local sid, title, tplStr = msg:match("^T%^(%d+)%^([^%^]*)%^?(.*)$")
+        if sid then
+            local id = tonumber(sid)
+            local tpl = {}
+            for part in tplStr:gmatch("[^~]+") do tpl[#tpl + 1] = part end
+            TextCache()[id] = { title = title, tpl = tpl }
+            wanted[id] = nil
+            RefreshQuestText(id)
+        end
     elseif kind == "X" then
         members[who] = nil
         incoming[who] = nil
@@ -407,6 +631,7 @@ local function OnMessage(msg, sender)
             t.quests[id] = q
             t.done = t.done or {}
             t.done[id] = nil
+            CacheText(id, q.title, q.objs)   -- an old-format message carries the wording: keep it
             Track(id, q.title)
             Later("done", 2, function() ReportDone() end)   -- if I've finished it, say so
         end
@@ -1112,6 +1337,20 @@ local function BuildPlan(out)
             if not title[id] then title[id] = q.title or seen[id] or "?"; table.insert(ids, id) end
         end
     end
+    -- Quests a teammate has finished that I haven't, even if nobody has them in their log now
+    -- (known from the "finished" reports, which cover every quest seen in the group and the quests before them).
+    for id in pairs(seen) do
+        if not title[id] and not Completed(id) then
+            local doneByMate = false
+            for _, p in ipairs(players) do
+                if not p.me and p.isDone(id) then doneByMate = true end
+            end
+            if doneByMate then
+                title[id] = (type(seen[id]) == "string" and seen[id]) or (ns.QuestName and ns.QuestName(id)) or ("quest " .. id)
+                table.insert(ids, id)
+            end
+        end
+    end
     table.sort(ids, function(a, b) return title[a] < title[b] end)
 
     local share, get, relay, catchUp, blocked = {}, {}, {}, {}, {}
@@ -1184,7 +1423,30 @@ local function BuildPlan(out)
             table.insert(relay, { head .. " |cff808080-|r " .. Labels(holdMates)
                 .. " |cff808080should share it with|r " .. Labels(canMates) })
         end
-        if #holders >= 2 then
+        -- A teammate has finished it and I haven't: catch up. Every player gets a line: finished / progress / not started.
+        local mateDone = {}
+        for _, p in ipairs(players) do
+            if not p.me and not p.quests[id] and p.isDone(id) then mateDone[#mateDone + 1] = p end
+        end
+        local handled = false
+        if #mateDone > 0 and not Completed(id) then
+            handled = true
+            local best = -1
+            for _, p in ipairs(holders) do best = math.max(best, info[p].score) end
+            local subs = {}
+            for _, p in ipairs(players) do
+                if p.quests[id] then
+                    local isBehind = info[p].score < best - 0.001
+                    table.insert(subs, Label(p) .. (isBehind and " |cffffa040" or " |cff40ff40") .. info[p].text .. "|r")
+                elseif p.isDone(id) then
+                    table.insert(subs, Label(p) .. " |cff40c0fffinished|r")
+                else
+                    table.insert(subs, Label(p) .. " |cff808080not started|r")
+                end
+            end
+            table.insert(catchUp, { head, sub = subs, id = mine and id or nil, guide = (not mine) and id or nil })
+        end
+        if not handled and #holders >= 2 then
             local best, worst = -1, 2
             for _, p in ipairs(holders) do
                 best = math.max(best, info[p].score); worst = math.min(worst, info[p].score)
@@ -1222,7 +1484,7 @@ local function BuildPlan(out)
     any = Section("|cff40c0ffGet these|r |cff808080(click one to see how)|r", get, any and 12 or 0) or any
     any = Section("|cffffa040Ask a teammate to share|r", relay, any and 12 or 0) or any
     any = Section("|cffff6040Can't be shared yet|r |cff808080(requirements not met)|r", blocked, any and 12 or 0) or any
-    any = Section("|cffffa040Catch up|r |cff808080(same quest, different progress)|r", catchUp, any and 12 or 0) or any
+    any = Section("|cffffa040Catch up|r |cff808080(a teammate is further along or has finished it)|r", catchUp, any and 12 or 0) or any
     if not any and not IsSyncing() then   -- don't claim "in sync" before the answers are in
         table.insert(out, { "|cff40ff40Everyone is on the same quests at the same point - nothing to do.|r", 0, 0 })
     end
@@ -1544,7 +1806,10 @@ local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LOGIN")
 frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 frame:RegisterEvent("GROUP_ROSTER_UPDATE")
-frame:RegisterEvent("QUEST_LOG_UPDATE")
+-- Events that mean one of my quests changed (not every one exists on every game version, so a missing one is skipped).
+local MINE_EVENTS = { QUEST_LOG_UPDATE = true, UNIT_QUEST_LOG_CHANGED = true, QUEST_ACCEPTED = true,
+    QUEST_REMOVED = true, QUEST_TURNED_IN = true, QUEST_WATCH_UPDATE = true }
+for name in pairs(MINE_EVENTS) do pcall(frame.RegisterEvent, frame, name) end
 frame:RegisterEvent("CHAT_MSG_ADDON")
 frame:RegisterEvent("QUEST_DETAIL")
 frame:RegisterEvent("PLAYER_LEVEL_UP")
@@ -1560,8 +1825,10 @@ frame:SetScript("OnEvent", function(self, event, a1, a2, a3, a4)
         end
     elseif event == "CHAT_MSG_ADDON" then
         if a1 == PREFIX and a2 and a4 then OnMessage(a2, a4) end
-    elseif event == "QUEST_LOG_UPDATE" then
-        Later("mine", 1, UpdateMine)   -- this event fires a lot; one look a second is plenty
+    elseif MINE_EVENTS[event] then
+        -- A quest changed (progress, accepted, turned in, abandoned): re-read my log shortly and send only what changed.
+        -- 0.25 s is short enough that teammates see it at about the same moment; several events in a row become one look.
+        Later("mine", 0.25, UpdateMine)
     else
         -- PLAYER_ENTERING_WORLD (login, /reload) and GROUP_ROSTER_UPDATE
         Later("roster", 1, OnRoster)

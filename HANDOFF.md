@@ -317,3 +317,24 @@ quest enemy arrow, free keys, Zephras terrain, flight master map icons). Commit/
   spaces/hyphens; "name" + realm or the start of it). MapDraw got the same fix. Your own name is shown as it looks to others (`myNetName`, learned from your own echoed
   messages, e.g. "Skade Stormr") via `MyName()`. `/p13 questsdebug` also prints counters (hellos sent, full lists sent/applied, newcomers seen, messages by kind) - if the
   refreshing continues, those numbers show which part repeats. Not verified in game.
+- **v0.8.5**: map drawing - "Clear all" button (row order 33; shown whenever any line is on the map, whoever drew it): `ClearAll()` removes every stroke and sends
+  `A`; receivers clear everything too and print who did it. `/p13 mapdraw clear all` does the same. Older clients ignore `A`.
+- **v0.8.6**: sync plan "Catch up" also lists quests a teammate has FINISHED that you haven't (even ones nobody holds now: ids come from `seen` + the teammates' `done`
+  sets). Each such quest shows every player: "finished" (blue) / progress (green/amber) / "not started". Click = track it if it's yours, else how-to-get-it panel.
+  Only quests whose id is in `seen` (anything in anyone's log, plus prerequisite / exclusive / parent ids via `ns.QuestRelated`) can be known as finished - the "D" reports
+  cover nothing else. Note exclusive-with quests a teammate chose instead may show up here too.
+- **v0.9.0 faster sync** (QuestShare protocol): quests travel as compact records packed several to a message (`V^id:state:+3/10,-;...`, ~15-25 bytes each instead of a
+  ~200-byte `Q` per quest). The wording (title, objective templates with `{c}` for the count) is sent once per quest as `T`, asked for with `N^id,id,...`, and cached in
+  `P13TweaksDB.questText` (cap ~6000 entries); `BuildQuest` re-assembles "Boars slain: 3/10" from template + count, falling back to QuestieDB's name / "Quest <id>".
+  `SendQuests()` uses `V` only when `Modern()` (every known member/incoming list has version >= 0.9.0, demos ignored), else the old `Q` per quest, so older clients keep working.
+  A full list is held until its `E` arrives AND any unknown wording has been delivered (`incoming[who].need` / `gotE`; the 3 s quiet rule still ends a stuck wait; late `T`
+  rebuilds stored quests via `RefreshQuestText`). Old `Q` messages also seed the cache. Typical full sync: ~2-3 messages instead of one per quest (first ever sync with a
+  teammate still costs one `T` per quest you don't know). Stored quests carry `.raw` (the compact objective string). Fingerprint "skip if unchanged" NOT done yet.
+  Untested with a real second player - `/p13 questsdebug` shows received message counts per kind (V/N/T/E...).
+- **v0.9.1**: a quest change on one client reaches the others at about the same moment: my log is re-read 0.25 s after any of `MINE_EVENTS` (QUEST_LOG_UPDATE,
+  UNIT_QUEST_LOG_CHANGED, QUEST_ACCEPTED, QUEST_REMOVED, QUEST_TURNED_IN, QUEST_WATCH_UPDATE; registered with pcall) - was 1 s after QUEST_LOG_UPDATE only - and only the changed
+  quest goes out as a one-record `V` (or a `Q` for old clients). The receiving window refreshes ~0.2 s later. Live deltas still apply immediately (only full lists are held back).
+- **v0.9.2 FollowClick** (new file `Features/FollowClick.lua`, in both .tocs - full game restart once): Shift + left-click a unit frame portrait follows that player. Sets the
+  frame's secure attributes `shift-type1 = "macro"`, `shift-macrotext1 = "/follow mouseover"` on PartyMemberFrame1-4, CompactPartyFrameMember1-5, CompactRaidFrame1-40 and TargetFrame
+  (out of combat only; `Apply()` retried on PLAYER_REGEN_ENABLED, re-run on GROUP_ROSTER_UPDATE because compact frames appear/disappear). Turning the option off removes only the attributes we set.
+  Option `followClick` (Quests tab > Group). Relies on the game honouring modifier attributes on its own secure unit frames and on `mouseover` being the clicked unit - not verified in game.

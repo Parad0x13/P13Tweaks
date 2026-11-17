@@ -24,7 +24,7 @@ local LAYOUT = {
     } },
     { name = "Quests", icon = "Interface\\Icons\\INV_Scroll_03", sections = {
         { "Quest enemies", { "questMobArrow" } },
-        { "Group", { "questShare", "questShareTooltips", "questShareAuto", "questHow" } },
+        { "Group", { "questShare", "questShareTooltips", "questShareAuto", "questHow", "followClick" } },
     } },
     { name = "Towns", icon = "Interface\\Icons\\INV_Misc_Bag_10", sections = {
         { "Townsfolk", { "minimapTownsfolk", "worldmapTownsfolk" } },
