@@ -297,6 +297,35 @@ local function GetLine()
     return l
 end
 
+-- The painted map (and its "explored area" pieces) sits in frames whose level/strata we can't know in
+-- advance, and a line layer below them is hidden. So look at what's in the map canvas and put the
+-- layer above all of it.
+local STRATA = { BACKGROUND = 1, LOW = 2, MEDIUM = 3, HIGH = 4, DIALOG = 5, FULLSCREEN = 6, FULLSCREEN_DIALOG = 7, TOOLTIP = 8 }
+local lastRaise = 0
+local function RaiseLayer(child, force)
+    if not force and GetTime() - lastRaise < 1 then return end
+    lastRaise = GetTime()
+    local kids = { child:GetChildren() }
+    local topName = layer:GetFrameStrata()
+    local top = STRATA[topName] or 1
+    for _, k in ipairs(kids) do
+        if k ~= layer then
+            local name = k:GetFrameStrata()
+            if (STRATA[name] or 1) > top then top, topName = STRATA[name], name end
+        end
+    end
+    if layer:GetFrameStrata() ~= topName then layer:SetFrameStrata(topName) end
+    local maxLevel = child:GetFrameLevel()
+    for _, k in ipairs(kids) do
+        if k ~= layer and k:GetFrameStrata() == topName then
+            maxLevel = math.max(maxLevel, k:GetFrameLevel())
+        end
+    end
+    local want = math.min(9999, maxLevel + 1)
+    if layer:GetFrameLevel() ~= want then layer:SetFrameLevel(want) end
+    return #kids, maxLevel, topName
+end
+
 local function Redraw(force)
     local sc = WorldMapFrame and WorldMapFrame.ScrollContainer
     local child = sc and sc.Child
@@ -312,6 +341,7 @@ local function Redraw(force)
     linesUsed = 0
     if not On() then return end
 
+    RaiseLayer(child, force)
     layer:SetScale(1 / scale)
     layer:SetSize(W * scale, H * scale)
     local sx, sy = W * scale, H * scale
@@ -435,6 +465,13 @@ ns:RegisterCommand("mapdraw", "map drawing: /p13 mapdraw clear (your lines), /p1
         ClearMine()
         Send("X")
         ns:Print("All map lines are cleared on your map, including your teammates'. They keep their own until they clear them.")
+    elseif arg == "debug" then
+        local sc = WorldMapFrame and WorldMapFrame.ScrollContainer
+        if not (sc and layer) then ns:Print("The map isn't ready."); return end
+        local n, maxLevel, strata = RaiseLayer(sc.Child, true)
+        ns:Print(("draw layer: level %d, strata %s | map canvas: level %d, %d child frames, highest child level %s (strata %s) | %d lines on %d strokes | map %s"):format(
+            layer:GetFrameLevel(), layer:GetFrameStrata(), sc.Child:GetFrameLevel(), n or 0, tostring(maxLevel), tostring(strata),
+            linesUsed, #strokes, tostring(WorldMapFrame:GetMapID())))
     elseif arg == "demo" then
         local had = RemoveWhere(function(s) return s.demo end)
         if had then ns:Print("Pretend teammates' lines removed."); return end

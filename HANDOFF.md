@@ -282,3 +282,7 @@ quest enemy arrow, free keys, Zephras terrain, flight master map icons). Commit/
 - **v0.7.3**: map drawing lines were visible only in the black border outside the map picture on the friend's PC (hidden behind the map's own
   layers). The draw layer is now `sc.Child` level + 25 (was +16; route +18, flight points +20). If lines are STILL hidden, parent the layer to the
   ScrollContainer / WorldMapFrame instead of `sc.Child` and convert coordinates (canvas scale + scroll) by hand.
+- **v0.7.4**: map drawing lines still hidden on the game's PAINTED map (visible on the terrain map, where exploration pins are hidden). The draw layer
+  is now raised dynamically (`RaiseLayer`): at most once a second it scans `sc.Child:GetChildren()` and sets the layer's strata to the highest found and
+  its level to highest+1 (cap 9999). `/p13 mapdraw debug` prints the layer's level/strata, the canvas' child count / highest level / strata and how many
+  lines were drawn - paste that if lines are still hidden (the next idea would be a host frame outside `sc.Child`).
