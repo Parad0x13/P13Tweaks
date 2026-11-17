@@ -589,13 +589,6 @@ local function BuildByQuest(out)
     local missing = {}
     for name in pairs(GroupNames()) do if not members[name] then table.insert(missing, name) end end
     table.sort(missing)
-    local vers = {}
-    for _, p in ipairs(players) do
-        local v = p.name == "You" and ns.version or members[p.name].version
-        local c = (v == nil or v == ns.version) and "|cff808080" or "|cffff6040"
-        table.insert(vers, c .. p.name .. " v" .. (v or "?") .. "|r")
-    end
-    table.insert(out, { "Versions: " .. table.concat(vers, "  "), 0, 0 })
     table.insert(out, { "|cff808080Click one of your quests to share it with the group.|r", 0, 2 })
     if #missing > 0 then
         table.insert(out, { "|cff808080No P13Tweaks (can't be shown): " .. table.concat(missing, ", ") .. "|r", 0, 2 })
@@ -605,10 +598,11 @@ local function BuildByQuest(out)
     for _, id in ipairs(ids) do
         table.insert(out, { "|cffffd200" .. title[id] .. "|r", 0, 10, myQuests[id] and id or nil })
         for _, p in ipairs(players) do
-            local q = p.quests[id]
-            local status = q and Summary(q) or (p.isDone(id) and "|cff40c0ffalready completed|r") or "|cff808080not started|r"
-            local ver = p.name == "You" and ns.version or members[p.name].version
-            table.insert(out, { p.color .. p.name .. "|r" .. VerTag(ver) .. ": " .. status, 14, 1 })
+            if p.name ~= "You" then   -- you're already in your own quest log; only show teammates
+                local q = p.quests[id]
+                local status = q and Summary(q) or (p.isDone(id) and "|cff40c0ffalready completed|r") or "|cff808080not started|r"
+                table.insert(out, { p.color .. p.name .. "|r" .. VerTag(members[p.name].version) .. ": " .. status, 14, 1 })
+            end
         end
     end
 end

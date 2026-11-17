@@ -73,12 +73,11 @@ Personal quality-of-life addon for **WoW Forever** (`P13Tweaks.toc`, interface 1
 | QuestMobArrow | draggable on-screen arrow (`Media/Arrow.tga`, rotated `atan2(dY,dX) - GetPlayerFacing()`, green ahead → red behind; fake 3D: texture box is 64×32 so `SetRotation` draws it foreshortened like a shape on the ground – ahead points up the screen, behind points down; ring + shadow under it, up to 30 % smaller when behind; direction word "ahead / ahead, left / to your right / behind you" in the label) to the nearest **spawn point** of a creature still needed: each unfinished quest-log objective text is matched by name against QuestieDB `Quest.Get(id,"objectives")` groups [1] creatures, [5] kill credit, [3] items → `Item.Get(id,"npcDrops")`. Spawns via `Npc.Get(id,"spawns")` + ProfCap's `ns.LoadAreaMap`, cached as world points. Re-scan on `QUEST_LOG_UPDATE` (1 s debounce), nearest every 0.5 s (keeps the old spot unless the new one is 15 % / 10 yd closer – stops flip-flopping), arrow redrawn every frame with its angle eased toward the real one (`EASE` 18/s) for smooth turning; "around here" within 15 yd; arrow hidden when facing is unavailable. Needs QuestieDB. Option `questMobArrow`; position `questMobArrowPos`. First version – user will iterate | `mobarrow` (list targets + nearest) |
 
 ## Sharing with another PC
-`installer/Install P13Tweaks.bat` → `installer/Update-P13Tweaks.ps1 -Install`: downloads `main` from GitHub
-(API zipball; `$Token` needed while the repo is private), copies into every `_forever_`/`_classic_`
-`Interface\AddOns\P13Tweaks` it finds (skips `installer`, `tools`, `link.ps1`, `HANDOFF.md`; never touches a
-junction), stores the commit sha in `%LOCALAPPDATA%\P13Tweaks\installed.txt`, adds a hidden Startup-folder
-shortcut (`-Quiet`, runs at every Windows start) and a desktop "Update P13Tweaks" shortcut. Log:
-`%LOCALAPPDATA%\P13Tweaks\update.log`. Not run yet (repo private, no token).
+Git clone + junction only (no copy-based installer; it was removed in v0.3.6). Partner: install git, clone the repo
+(private: sign in / read-only token), run `link.ps1` (finds WoW on any drive, replaces a plain copied folder with a
+junction, idempotent). Updating = `git pull` + full WoW restart to see a new .toc version.
+Her PC may still hold leftovers from the removed installer: `%LOCALAPPDATA%\P13Tweaks\`, the Startup shortcut
+"P13Tweaks updater" and the desktop "Update P13Tweaks" shortcut. They are harmless (the updater skips links) but can be deleted.
 
 ## Session 2026-11-17 (v0.2.0 to v0.3.2; the quest-log button was tried and replaced by a footer button in /p13) – untested in game, not yet committed
 - **Versioning**: `## Version:` in BOTH .toc files is bumped on every update (user's request, so they and their
@@ -147,7 +146,7 @@ User-tested in game unless noted:
   `medic`/`physician`/`surgeon` and Leatherworking `leathercraft`. Found by decoding QuestieDB's baked
   data: `QuestieDB_Forever.toc` lines `## X-Npc-<id>-<field>: <base64 CBOR>` (field `S` = map of the
   string/number fields by key index: 1 name, 13 friendlyToFaction, 14 subName, 15 npcFlags; field `7` = spawns).
-- **installer/** (new): see "Sharing with another PC". The partner's setup (public repo vs token) isn't decided yet.
+- (installer/ was removed later; see "Sharing with another PC".)
 
 ## Earlier session's changes
 - **RangeBeep**: "beep when target is X yards" with a typed number (default 30); ranges from the
@@ -200,3 +199,11 @@ quest enemy arrow, free keys, Zephras terrain, flight master map icons). Commit/
 - **v0.3.3**: each player's name shows their P13Tweaks version (`VerTag`, red when it differs from yours) in both quest views.
   "Ask again" now sends the hello, waits 6 s, and reports per group member: updated (N quests, version) / no answer /
   no P13Tweaks - in chat and as a "Last check" block at the top of the window. Members get a `heard` timestamp on any message.
+- **v0.3.4**: by-quest view no longer lists a "You" row (or the old "Versions:" line) - only teammates; your own
+  quests still appear as clickable titles. Link-P13Tweaks.ps1: fixed a bug where re-running it (desktop shortcut)
+  threw "Failed" after pulling because it copied itself onto itself; the shortcut now runs the script from the clone
+  (`%USERPROFILE%\P13Tweaks\installer\Link-P13Tweaks.ps1`) so pulls update it, and it logs the .toc version it finds.
+- **v0.3.5**: `link.ps1` is now THE way to link a clone (auto-finds WoW on any drive, replaces a plain copied
+  AddOns\P13Tweaks with the junction, idempotent, `-NoPause` for terminals). Removed the git-installer
+  (`Link-P13Tweaks.ps1` + `.bat`) from v0.3.2-0.3.4. Partner setup is now: install git, `git clone` the repo, run link.ps1,
+  then just `git pull` (+ full WoW restart to see a new .toc version). The older copy-based installer remains.
