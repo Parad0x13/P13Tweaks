@@ -192,3 +192,8 @@ quest enemy arrow, free keys, Zephras terrain, flight master map icons). Commit/
 - **v0.3.x additions**: `Features/MinimapButton.lua` (round "P13" minimap button; left = options, right = `/p13 quests`,
   draggable, angle in `minimapButtonAngle`, option `minimapButton`). The /p13 window footer has a "Teammates' quests"
   button (calls `ns.commands.quests`). The quest-log "Teammates" button and its option were removed in 0.3.2.
+- **installer/Link-P13Tweaks.ps1 + `Link P13Tweaks (git).bat`** (new): git-based setup so `git pull` updates the game.
+  Installs git via winget if missing, clones to `%USERPROFILE%\P13Tweaks` (token from `$Token` or the older installer's
+  copy; remote URL carries it), replaces the copied `AddOns\P13Tweaks` folder with a junction to the clone, and makes an
+  "Update P13Tweaks" desktop shortcut that re-runs it (pull). Parse-checked only, not run. The old Update-P13Tweaks
+  startup updater skips junctions, so it's harmless alongside.
