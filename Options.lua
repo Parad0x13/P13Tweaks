@@ -435,8 +435,7 @@ function ns:CreateOptionsUI()
     title:SetTextColor(ACCENT[1], ACCENT[2], ACCENT[3])
     local sub = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     sub:SetPoint("BOTTOMLEFT", title, "BOTTOMRIGHT", 8, 1)
-    local version = C_AddOns and C_AddOns.GetAddOnMetadata and C_AddOns.GetAddOnMetadata(ADDON_NAME, "Version")
-        or (GetAddOnMetadata and GetAddOnMetadata(ADDON_NAME, "Version"))
+    local version = ns.version
     sub:SetText("options" .. (version and ("  ·  v" .. version) or ""))
 
     local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")

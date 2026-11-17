@@ -207,3 +207,7 @@ quest enemy arrow, free keys, Zephras terrain, flight master map icons). Commit/
   AddOns\P13Tweaks with the junction, idempotent, `-NoPause` for terminals). Removed the git-installer
   (`Link-P13Tweaks.ps1` + `.bat`) from v0.3.2-0.3.4. Partner setup is now: install git, `git clone` the repo, run link.ps1,
   then just `git pull` (+ full WoW restart to see a new .toc version). The older copy-based installer remains.
+- **v0.3.7**: the version now lives in `Version.lua` (`ns.version`, loaded first in both .tocs) as well as `## Version:` in the
+  .tocs - bump all three every update. Reason: `/reload` re-reads Lua but NOT the .toc, so a pull + `/reload` now shows the
+  new version. Only adding a new file to the .toc (or changing Interface/SavedVariables) still needs a full game restart.
+  Partner setup = clone on her Desktop + `link.ps1` once; afterwards `git pull` + `/reload`.

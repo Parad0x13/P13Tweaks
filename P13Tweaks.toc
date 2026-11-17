@@ -2,10 +2,11 @@
 ## Title: P13Tweaks
 ## Notes: Personal quality-of-life tweaks. Type /p13 to open options.
 ## Author: bryan
-## Version: 0.3.6
+## Version: 0.3.7
 ## SavedVariables: P13TweaksDB
 ## OptionalDeps: QuestieDB
 
+Version.lua
 Core.lua
 Features\MapCircle.lua
 Features\MapSeamless.lua

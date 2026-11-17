@@ -3,7 +3,8 @@ local ADDON_NAME, ns = ...
 
 ns.name = "P13Tweaks"
 -- Version from the .toc ("## Version:"). It's bumped on every update so you and a friend can compare.
-ns.version = (C_AddOns and C_AddOns.GetAddOnMetadata and C_AddOns.GetAddOnMetadata(ADDON_NAME, "Version"))
+-- Version.lua (loaded first) sets ns.version; the .toc value is only a fallback.
+ns.version = ns.version or (C_AddOns and C_AddOns.GetAddOnMetadata and C_AddOns.GetAddOnMetadata(ADDON_NAME, "Version"))
     or (GetAddOnMetadata and GetAddOnMetadata(ADDON_NAME, "Version")) or "?"
 ns.options = {}   -- ordered list of option definitions
 
