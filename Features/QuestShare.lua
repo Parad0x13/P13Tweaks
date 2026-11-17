@@ -22,6 +22,9 @@
 --                      after a full list and every 30 s. Teammates compare it with their copy of my quests; a mismatch that
 --                      persists 3 s makes them answer with Y
 --   Y^<name>           "<name>, please resend your full list" (answered with C ... E)
+--   F^<hash>^<n>^<chash>  (0.13.0+) the 3rd field fingerprints EVERYTHING I have completed; a teammate whose copy differs asks
+--   Z^<name>           "<name>, send me everything you have completed" (rate-limited), answered with K pieces:
+--   K^<count>^<chash>^<part>^<parts>^<data>   completed quest ids, sorted, as base-64 gaps (5 bits per char, +32 = more digits)
 --   D^<id>             I've already finished that quest (sent only for quests someone in the group
 --                      has had, so the window can tell "not started" from "already done")
 -- The window (/p13 quests) has two views: by quest (every quest anyone has, with where each player
@@ -44,6 +47,9 @@ local incoming = {}   -- full lists still arriving (see the Receiving section)
 local noticed = {}    -- "name:questId" -> true once I've said a teammate finished a quest I have
 local lastF = {}      -- name -> { hex, n, at }: the quest-log fingerprint a teammate last announced
 local askedY = {}     -- name -> when I last asked them to resend their list
+local askedZ = {}     -- name -> when I last asked them for their completed-quests list
+local doneParts = {}  -- name -> pieces of a completed-quests list still arriving
+local candDirtyFlag = { v = true }   -- set when teammates' finished-quest lists change (so the "catch up" candidates are rebuilt)
 local CheckFingerprint   -- set further down
 local wanted = {}     -- quest id -> true: a teammate's quest whose title/objective wording I don't have yet
 local askedAt = {}    -- quest id -> when I last asked the group for its wording
@@ -348,6 +354,74 @@ local function SendProfile()
     Send(("P^%d^%d^%d^%d"):format(UnitLevel("player") or 0, raceId or 0, classId or 0, n))
 end
 
+-- Every quest I've ever completed (not just the ones in anyone's log), so teammates can see what I've already done.
+-- Sent on request ("K" messages) as sorted ids, each stored as the gap from the one before, in base-64 digits:
+-- 5 bits per character, +32 on a character means "more digits follow". A few thousand quests = a few thousand characters.
+local K64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+local K64DEC = {}
+for i = 1, 64 do K64DEC[K64:sub(i, i)] = i - 1 end
+
+local function CompletedList()
+    local ids = {}
+    if C_QuestLog and C_QuestLog.GetAllCompletedQuestIDs then
+        for _, id in ipairs(C_QuestLog.GetAllCompletedQuestIDs() or {}) do ids[#ids + 1] = id end
+    elseif GetQuestsCompleted then
+        for id, v in pairs(GetQuestsCompleted() or {}) do if v then ids[#ids + 1] = id end end
+    end
+    table.sort(ids)
+    return ids
+end
+
+local function HashIds(ids)
+    local h = 5381
+    for _, id in ipairs(ids) do h = (h * 33 + id) % 4294967296 end
+    return ("%04x%04x"):format(math.floor(h / 65536), h % 65536)
+end
+
+local function EncodeIds(ids)
+    local out, prev = {}, 0
+    for _, id in ipairs(ids) do
+        local d = id - prev
+        prev = id
+        repeat
+            local part = d % 32
+            d = math.floor(d / 32)
+            local v = part + (d > 0 and 32 or 0)
+            out[#out + 1] = K64:sub(v + 1, v + 1)
+        until d == 0
+    end
+    return table.concat(out)
+end
+
+-- Returns a set { [id] = true }, or nil if the text isn't valid.
+local function DecodeIds(s)
+    local set, prev, acc, mul = {}, 0, 0, 1
+    for i = 1, #s do
+        local v = K64DEC[s:sub(i, i)]
+        if not v then return nil end
+        acc = acc + (v % 32) * mul
+        if v < 32 then
+            prev = prev + acc
+            set[prev] = true
+            acc, mul = 0, 1
+        else
+            mul = mul * 32
+        end
+    end
+    return set
+end
+
+-- My completed list and its hash, recalculated when a quest left my log or after a minute.
+local compCache = { ids = nil, hex = "00000000", at = -1000, dirty = true }
+local function CompletedInfo()
+    if compCache.ids and not compCache.dirty and GetTime() - compCache.at < 60 then return compCache end
+    compCache.ids = CompletedList()
+    compCache.hex = #compCache.ids > 0 and HashIds(compCache.ids) or "00000000"
+    compCache.at = GetTime()
+    compCache.dirty = false
+    return compCache
+end
+
 -- A quick "hash check" of a quest log: a short fingerprint of every quest's id, state and counts. Two clients that
 -- hold the same list get the same fingerprint, so a teammate's "F" message tells me in a few bytes whether my copy
 -- of their log is complete and current - no need to resend anything when it matches.
@@ -368,7 +442,21 @@ end
 local function SendFingerprint()
     if not (Sharing() and Channel()) then return end
     local hex, n = Fingerprint(myQuests)
-    Send("F^" .. hex .. "^" .. n)
+    Send("F^" .. hex .. "^" .. n .. "^" .. CompletedInfo().hex)   -- 3rd: fingerprint of everything I've completed
+end
+
+-- Send my whole completed-quests list (several messages), when a teammate asks for it.
+local function SendCompleted()
+    if not (Sharing() and Channel()) then return end
+    compCache.dirty = true
+    local info = CompletedInfo()
+    if #info.ids == 0 then return end
+    local data = EncodeIds(info.ids)
+    local CHUNK = 200
+    local parts = math.ceil(#data / CHUNK)
+    for p = 1, parts do
+        Send(("K^%d^%s^%d^%d^%s"):format(#info.ids, info.hex, p, parts, data:sub((p - 1) * CHUNK + 1, p * CHUNK)))
+    end
 end
 
 -- Re-reads my quest log; when sharing, sends only what changed since last time.
@@ -386,7 +474,7 @@ local function UpdateMine()
         end
         SendQuests(changed, quests)
         for id in pairs(lastSent) do
-            if not quests[id] then lastSent[id] = nil; Send("R^" .. id) end
+            if not quests[id] then lastSent[id] = nil; compCache.dirty = true; Send("R^" .. id) end   -- it may have been turned in
         end
     end
     myQuests = quests
@@ -641,7 +729,8 @@ local function OnMessage(msg, sender)
         -- (and everyone else's is), so the window changes once instead of piece by piece.
         local ver = msg:match("^C%^(.+)$") or (m and m.version)
         incoming[who] = { complete = false, need = {},
-            m = { quests = {}, done = {}, protocol = m and m.protocol, version = ver } }
+            -- (their finished-quests set and its hash carry over: a new quest list doesn't change what they've completed)
+            m = { quests = {}, done = (m and m.done) or {}, doneHash = m and m.doneHash, protocol = m and m.protocol, version = ver } }
         CheckVersion(who, ver)
         Later("applyTimeout", SYNC_TIMEOUT, ApplyIncoming)   -- never wait forever on a teammate who doesn't finish
         Later("window", 0.2, function() RefreshWindow() end) -- shows "Syncing..."
@@ -721,9 +810,9 @@ local function OnMessage(msg, sender)
         end
     elseif kind == "F" then
         -- a teammate's fingerprint: compare with my copy of their quests
-        local hex, n = msg:match("^F%^(%x+)%^(%d+)")
+        local hex, n, chex = msg:match("^F%^(%x+)%^(%d+)%^?(%x*)")
         if hex then
-            lastF[who] = { hex = hex, n = tonumber(n), at = GetTime() }
+            lastF[who] = { hex = hex, n = tonumber(n), at = GetTime(), c = chex ~= "" and chex or nil }
             if not m or m.ghost then
                 -- I have no live copy of them at all: ask for their list
                 if not incoming[who] and (not askedY[who] or GetTime() - askedY[who] > 20) then
@@ -732,6 +821,42 @@ local function OnMessage(msg, sender)
                 end
             else
                 CheckFingerprint(who)
+                -- their completed-quests list: do I have the current one? (3rd field; "00000000" = they've completed nothing)
+                if chex ~= "" and chex ~= "00000000" and m.doneHash ~= chex
+                    and (not askedZ[who] or GetTime() - askedZ[who] > 60) then
+                    askedZ[who] = GetTime()
+                    Send("Z^" .. who)
+                end
+            end
+        end
+    elseif kind == "Z" then
+        -- "<name>, please send everything you've completed": it's me
+        if IsMe(msg:sub(3)) then Later("sendK", 1, SendCompleted) end
+    elseif kind == "K" then
+        -- a piece of a teammate's completed-quests list
+        local cnt, chex, part, parts, data = msg:match("^K%^(%d+)%^(%x+)%^(%d+)%^(%d+)%^(.*)$")
+        part, parts, cnt = tonumber(part), tonumber(parts), tonumber(cnt)
+        if cnt and part and parts and part >= 1 and part <= parts and parts <= 60 and cnt <= 12000 then
+            local p = doneParts[who]
+            if not p or p.hex ~= chex or p.parts ~= parts then
+                p = { hex = chex, parts = parts, got = {}, cnt = cnt }
+                doneParts[who] = p
+            end
+            p.got[part] = data
+            local have = 0
+            for _ in pairs(p.got) do have = have + 1 end
+            if have == parts then
+                doneParts[who] = nil
+                local set = DecodeIds(table.concat(p.got))
+                local t = (incoming[who] and incoming[who].m) or m
+                if not t then t = { quests = {} }; members[who] = t end
+                if set then
+                    for id in pairs(t.done or {}) do set[id] = true end   -- keep any single "finished" reports too
+                    t.done = set
+                    t.doneHash = chex
+                    candDirtyFlag.v = true
+                    Later("remember", 5, function() RememberAll() end)
+                end
             end
         end
     elseif kind == "Y" then
@@ -1299,6 +1424,51 @@ local function PlayersLine(out, names)
     end
 end
 
+-- Quests a teammate has completed that I haven't and could reasonably do now: their level needs are met and they're not far
+-- below my level. A teammate's completed list can be thousands long, so QuestieDB is asked about at most 80 new quests per
+-- call and the rest are picked up on the next ones (the window / map refresh again shortly). Newest-level first, at most 40.
+-- Each entry: { id, ql (quest level) }.
+local candCache, candAt = {}, -100
+local levelDone = {}   -- quest id -> its QuestieDB level info, or false if QuestieDB doesn't know it
+local function DoneCandidates()
+    if not candDirtyFlag.v and GetTime() - candAt < 5 then return candCache end
+    candDirtyFlag.v = false
+    candAt = GetTime()
+    if not (ns.QuestLevelInfo) then return candCache end
+    local myLevel = UnitLevel("player") or 1
+    local seenId, list, budget, more = {}, {}, 80, false
+    for _, m in pairs(members) do
+        if not m.demo then
+            for id in pairs(m.done or {}) do
+                if not seenId[id] and not myQuests[id] and not Completed(id) then
+                    seenId[id] = true
+                    local info
+                    if levelDone[id] ~= nil then
+                        info = levelDone[id] or nil
+                    elseif budget > 0 then
+                        budget = budget - 1
+                        info = ns.QuestLevelInfo(id)
+                        levelDone[id] = info or false
+                    else
+                        more = true   -- over budget for this call: the rest next time
+                    end
+                    if info and info.req <= myLevel and info.ql >= myLevel - 10 then
+                        list[#list + 1] = { id = id, ql = info.ql }
+                    end
+                end
+            end
+        end
+    end
+    table.sort(list, function(a, b) if a.ql ~= b.ql then return a.ql > b.ql end return a.id < b.id end)
+    for i = #list, 41, -1 do list[i] = nil end
+    candCache = list
+    if more then
+        candDirtyFlag.v = true
+        Later("cands", 0.3, function() RefreshWindow() end)   -- looks again (and so do the map hints on their next refresh)
+    end
+    return list
+end
+
 -- Teammates who have already FINISHED quest `id` (and don't hold it any more), while I haven't - or nil.
 -- Used to flag quests in my log that someone else has already done.
 local function FinishedBy(id)
@@ -1561,6 +1731,15 @@ local function BuildPlan(out)
                 title[id] = (type(seen[id]) == "string" and seen[id]) or (ns.QuestName and ns.QuestName(id)) or ("quest " .. id)
                 table.insert(ids, id)
             end
+        end
+    end
+    -- ...and the quests teammates have completed overall (their whole history, not just what's been seen in logs):
+    -- the ones I could reasonably do now (see DoneCandidates)
+    for _, c in ipairs(DoneCandidates()) do
+        local id = c.id
+        if not title[id] then
+            title[id] = (type(seen[id]) == "string" and seen[id]) or (ns.QuestName and ns.QuestName(id)) or ("quest " .. id)
+            table.insert(ids, id)
         end
     end
     table.sort(ids, function(a, b) return title[a] < title[b] end)
@@ -2000,18 +2179,29 @@ function ns.QuestHints(includeHas)
         h[field][#h[field] + 1] = who
         if title and not h.title then h.title = title end
     end
+    -- finished quests: only the ones I could reasonably do now (a teammate's whole history can be thousands long)
+    local cand = {}
+    for _, c in ipairs(DoneCandidates()) do cand[c.id] = true end
     for key, m in pairs(members) do
         if not m.demo then
-            for id in pairs(m.done or {}) do Note(id, "done", key) end
+            for id in pairs(m.done or {}) do
+                if cand[id] or (type(seen[id]) == "string") then Note(id, "done", key) end
+            end
             if includeHas then
                 for id, q in pairs(m.quests) do Note(id, "has", key, q.title) end
             end
         end
     end
+    -- quests I have in my log that a teammate already finished: marked at the turn-in, so I can see on the map
+    -- which of my quests someone has already done
+    for id, q in pairs(myQuests) do
+        local who = FinishedBy(id)
+        if who then byId[id] = { id = id, done = who, has = {}, mine = true, title = q.title } end
+    end
     local list = {}
     for id, h in pairs(byId) do
         h.title = h.title or (type(seen[id]) == "string" and seen[id]) or (ns.QuestName and ns.QuestName(id)) or ("Quest " .. id)
-        h.reasons = (ns.WhyCantTake and ns.WhyCantTake(id)) or {}
+        h.reasons = (not h.mine and ns.WhyCantTake and ns.WhyCantTake(id)) or {}
         list[#list + 1] = h
     end
     table.sort(list, function(a, b) return a.id < b.id end)

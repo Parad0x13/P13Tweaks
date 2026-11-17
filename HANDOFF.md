@@ -372,3 +372,15 @@ quest enemy arrow, free keys, Zephras terrain, flight master map icons). Commit/
   ("tagged" here = targeted; the game has no addon-readable "who hit first"). Every 0.2 s: collect `UnitGUID(partyNtarget / raidNtarget)` of alive attackable targets, then for each
   `C_NamePlate.GetNamePlates()` plate whose unit GUID matches, show a child frame anchored above `plate.UnitFrame`; hidden on `NAME_PLATE_UNIT_REMOVED` / when no longer targeted. Works with
   teammates who lack P13Tweaks. Needs enemy nameplates on in the game's settings. Option `taggedMarks` (Combat tab > Group). Not verified in game.
+- **v0.13.0 completed-quests sync**: the old "D" reports only covered quests someone had in a log (`seen`), so a teammate's earlier quests were invisible. Now `F^hex^n^chash` carries a hash
+  of everything the sender completed (`CompletedList()` = `C_QuestLog.GetAllCompletedQuestIDs` / `GetQuestsCompleted`; cached in `compCache`, dirtied when a quest leaves the log). A teammate whose
+  `m.doneHash` differs sends `Z^<name>` (at most once a minute) and gets the list as `K^count^chash^part^parts^data` (sorted ids, gaps in base-64 varints, 200 chars a message; decoded into `m.done`,
+  keeping single D reports). `DoneCandidates()` turns those (possibly thousands) into <= 40 "reasonable now" quests (QuestieDB `ns.QuestLevelInfo`: required level <= mine, quest level >= mine-10; at most 80 QuestieDB
+  lookups per call, the rest next time) for the sync plan's Catch up section and the map hints (`ns.QuestHints` uses them + the old `seen` quests). The C list-start keeps a teammate's `done` set. Only 0.13.0+ clients
+  send/answer these; older ones are unaffected. Untested in game.
+- **v0.13.1**: map hints also mark quests I HAVE that a teammate already finished: a gold "?" (ActiveQuestIcon) at the quest's HAND-IN point (QuestieDB `finishedBy`; falls back to the giver) via new
+  `ns.QuestFinisherPoints(id)` (QuestWhere: `PointsFor(id, field)` shared with `QuestGiverPoints`). `ns.QuestHints` adds those entries with `mine = true` (from `FinishedBy(id)`, no "can't take" reasons);
+  the tooltip says "<names> already finished this - you have it (hand-in point)". Needs the teammate's finished data (K list on 0.13.0+, or a D report on older versions) and QuestieDB.
+- **v0.13.2**: the gold "?" for my quests that a teammate finished is now placed where the quest's WORK is done, not at the hand-in: `ns.QuestObjectivePoints(id)` (QuestWhere) gathers spawn points
+  from QuestieDB `objectives` ([1] creatures, [2] objects, [3] items -> `npcDrops`, [5] kill-credit groups; <= 14 creatures, <= 6 points each, <= 60 total; falls back to the hand-in
+  point), and MapQuestHints collapses the points on the shown map to ONE marker at the middle of the busiest cluster (within 6 % of the map). `ns.QuestFinisherPoints` is still the fallback.

@@ -130,16 +130,33 @@ function ns.QuestName(id)
     return lib and Get(lib.Quest, id, "name") or nil
 end
 
+-- { name, req (level needed to take it), ql (the quest's own level) } from QuestieDB, cached; nil if unknown.
+local levelCache = {}
+function ns.QuestLevelInfo(id)
+    local c = levelCache[id]
+    if c ~= nil then return c or nil end
+    local lib = Lib()
+    if not lib then return nil end   -- QuestieDB may just not be loaded yet: don't cache that
+    local name = Get(lib.Quest, id, "name")
+    if not name then levelCache[id] = false; return nil end
+    local req, ql = Get(lib.Quest, id, "requiredLevel"), Get(lib.Quest, id, "questLevel")
+    local info = { name = name, req = type(req) == "number" and req or 0, ql = type(ql) == "number" and ql or 0 }
+    levelCache[id] = info
+    return info
+end
+
 -- Where a quest is given: every spawn point (up to 12) of the NPCs / objects that start it, as
 -- { name, uiMap, x, y } with x, y in map percent; and the level it needs. Used by MapQuestHints.lua.
 local giverCache = {}
-function ns.QuestGiverPoints(id)
-    local c = giverCache[id]
+-- field is "startedBy" (where it's given) or "finishedBy" (where it's turned in)
+local function PointsFor(id, field)
+    local ckey = id .. ":" .. field
+    local c = giverCache[ckey]
     if c then return c.points, c.level end
     local lib = Lib()
     if not lib then return {}, nil end
     local points = {}
-    local sb = Get(lib.Quest, id, "startedBy")
+    local sb = Get(lib.Quest, id, field)
     local faction = (UnitFactionGroup("player") or ""):sub(1, 1)
     local areaMap = ns.LoadAreaMap and ns.LoadAreaMap() or {}
     local function Add(db, objId, checkFaction)
@@ -168,8 +185,73 @@ function ns.QuestGiverPoints(id)
     end
     local level = Get(lib.Quest, id, "requiredLevel")
     if type(level) ~= "number" or level < 1 then level = nil end
-    giverCache[id] = { points = points, level = level }
+    giverCache[ckey] = { points = points, level = level }
     return points, level
+end
+
+function ns.QuestGiverPoints(id) return PointsFor(id, "startedBy") end
+
+-- Where the quest's work is done: the spawn points of the creatures to kill, the creatures that drop the items to
+-- collect and the objects to use, from QuestieDB's objectives (up to 60 points; at most 6 per creature). Falls back
+-- to the hand-in point for quests with nothing to kill or collect. Used by MapQuestHints.lua for quests you have.
+local objCache = {}
+function ns.QuestObjectivePoints(id)
+    local cached = objCache[id]
+    if cached then return cached end
+    local lib = Lib()
+    if not lib then return {} end
+    local areaMap = ns.LoadAreaMap and ns.LoadAreaMap() or {}
+    local points = {}
+    local function Spawns(db, objId)
+        if not db or #points >= 60 then return end
+        local spawns = Get(db, objId, "spawns")
+        if type(spawns) ~= "table" then return end
+        local name = Get(db, objId, "name")
+        local mine = {}
+        for area, pts in pairs(spawns) do
+            local uiMap = areaMap[area]
+            if uiMap and uiMap ~= 0 and type(pts) == "table" then
+                for _, pt in ipairs(pts) do
+                    if pt[1] and pt[2] and pt[1] >= 0 and pt[2] >= 0 then
+                        mine[#mine + 1] = { name = name, uiMap = uiMap, x = pt[1], y = pt[2] }
+                    end
+                end
+            end
+        end
+        local step = math.max(1, math.ceil(#mine / 6))   -- spread at most 6 points over all of this creature's spawns
+        for i = 1, #mine, step do
+            if #points < 60 then points[#points + 1] = mine[i] end
+        end
+    end
+    local npcs, objs = {}, {}
+    local function AddNpc(n) if type(n) == "number" and #npcs < 14 then npcs[#npcs + 1] = n end end
+    local o = Get(lib.Quest, id, "objectives")
+    if type(o) == "table" then
+        for _, e in ipairs(type(o[1]) == "table" and o[1] or {}) do AddNpc(e[1]) end          -- creatures to kill
+        for _, e in ipairs(type(o[2]) == "table" and o[2] or {}) do                           -- objects to use
+            if type(e[1]) == "number" then objs[#objs + 1] = e[1] end
+        end
+        for _, e in ipairs(type(o[3]) == "table" and o[3] or {}) do                           -- items: who drops them
+            local drops = lib.Item and type(e[1]) == "number" and Get(lib.Item, e[1], "npcDrops")
+            if type(drops) == "table" then for _, n in ipairs(drops) do AddNpc(n) end end
+        end
+        for _, e in ipairs(type(o[5]) == "table" and o[5] or {}) do                           -- kill credit groups
+            for _, n in ipairs(type(e[1]) == "table" and e[1] or {}) do AddNpc(n) end
+            AddNpc(e[2])
+        end
+    end
+    for _, n in ipairs(npcs) do Spawns(lib.Npc, n) end
+    if lib.Object then for _, ob in ipairs(objs) do Spawns(lib.Object, ob) end end
+    if #points == 0 then points = ns.QuestFinisherPoints(id) end
+    objCache[id] = points
+    return points
+end
+
+-- Where a quest is turned in (falls back to where it's given if QuestieDB doesn't say).
+function ns.QuestFinisherPoints(id)
+    local pts, level = PointsFor(id, "finishedBy")
+    if #pts == 0 then return PointsFor(id, "startedBy") end
+    return pts, level
 end
 
 function ns.WhyCantTake(id, who)

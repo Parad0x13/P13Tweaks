@@ -8,7 +8,8 @@
 -- QuestShare.lua (ns.QuestHints) and QuestWhere.lua (ns.QuestGiverPoints).
 local ADDON_NAME, ns = ...
 
-local ICON = "Interface\\GossipFrame\\AvailableQuestIcon"
+local ICON = "Interface\\GossipFrame\\AvailableQuestIcon"          -- "!" : a quest to pick up
+local ICON_MINE = "Interface\\GossipFrame\\ActiveQuestIcon"        -- "?" : a quest I have, that a teammate already finished (marked where it's done)
 local SIZE = 22
 local MAX_HINTS = 100
 
@@ -33,11 +34,13 @@ end
 
 -- Where a quest's givers show on map mapID: { u, v (0..1 on that map), p = the giver point } for the ones that fall on it.
 local function PointsOn(hint, mapID)
-    local key = hint.id .. ":" .. mapID
+    local key = hint.id .. ":" .. mapID .. (hint.mine and "m" or "")
     local cached = convCache[key]
     if cached then return cached end
     local out = {}
-    local pts = ns.QuestGiverPoints and ns.QuestGiverPoints(hint.id) or {}
+    -- a quest I have: mark where its work is done (what to kill / collect); one I could pick up: where it's given
+    local fn = hint.mine and ns.QuestObjectivePoints or ns.QuestGiverPoints
+    local pts = fn and fn(hint.id) or {}
     for _, p in ipairs(pts) do
         local u, v
         if p.uiMap == mapID then
@@ -51,6 +54,23 @@ local function PointsOn(hint, mapID)
             end
         end
         if u and v and u >= 0 and u <= 1 and v >= 0 and v <= 1 then out[#out + 1] = { u = u, v = v, p = p } end
+    end
+    if hint.mine and #out > 1 then
+        -- the work area is many spawn points: one marker at the middle of the busiest cluster (within ~6 % of the map)
+        local R2 = 0.0036
+        local bestN, bestI = 0, 1
+        for i, a in ipairs(out) do
+            local n = 0
+            for _, b in ipairs(out) do
+                if (a.u - b.u) ^ 2 + (a.v - b.v) ^ 2 <= R2 then n = n + 1 end
+            end
+            if n > bestN then bestN, bestI = n, i end
+        end
+        local a, su, sv, k = out[bestI], 0, 0, 0
+        for _, b in ipairs(out) do
+            if (a.u - b.u) ^ 2 + (a.v - b.v) ^ 2 <= R2 then su, sv, k = su + b.u, sv + b.v, k + 1 end
+        end
+        out = { { u = su / k, v = sv / k, p = a.p } }
     end
     convCache[key] = out
     return out
@@ -103,7 +123,11 @@ local function ShowTooltip(self)
         local h = e.hint
         local lvl = e.level and ("  (level " .. e.level .. ")") or ""
         GameTooltip:AddLine(h.title .. lvl, 1, 0.82, 0)
-        if #h.done > 0 then GameTooltip:AddLine("   " .. Names(h.done) .. " finished this", 0.4, 0.75, 1) end
+        if h.mine then
+            GameTooltip:AddLine("   " .. Names(h.done) .. " already finished this - you have it (the area where it's done)", 1, 0.75, 0.25, true)
+        elseif #h.done > 0 then
+            GameTooltip:AddLine("   " .. Names(h.done) .. " finished this", 0.4, 0.75, 1)
+        end
         if #h.has > 0 then GameTooltip:AddLine("   " .. Names(h.has) .. " has this quest", 0.5, 1, 0.5) end
         if #h.reasons > 0 then GameTooltip:AddLine("   can't take it yet: " .. h.reasons[1], 1, 0.4, 0.3, true) end
     end
@@ -181,13 +205,17 @@ local function Redraw(force)
         b:ClearAllPoints()
         b:SetPoint("CENTER", layer, "TOPLEFT", g.u * sx, -g.v * sy)
         -- colour: blue = a teammate finished one of these, green = only in teammates' logs; grey = none of them can be taken yet
-        local anyTake, anyDone = false, false
+        local anyTake, anyDone, anyMine = false, false, false
         for _, e in ipairs(g) do
             if #e.hint.reasons == 0 then anyTake = true end
             if #e.hint.done > 0 then anyDone = true end
+            if e.hint.mine then anyMine = true end
         end
+        b.tex:SetTexture(anyMine and ICON_MINE or ICON)
         b.tex:SetDesaturated(true)
-        if not anyTake then
+        if anyMine then
+            b.tex:SetVertexColor(1, 0.75, 0.25, 1)   -- gold "?": one of my quests that a teammate has finished
+        elseif not anyTake then
             b.tex:SetVertexColor(0.6, 0.6, 0.6, 0.7)
         elseif anyDone then
             b.tex:SetVertexColor(0.45, 0.75, 1, 1)
