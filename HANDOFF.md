@@ -338,3 +338,29 @@ quest enemy arrow, free keys, Zephras terrain, flight master map icons). Commit/
   frame's secure attributes `shift-type1 = "macro"`, `shift-macrotext1 = "/follow mouseover"` on PartyMemberFrame1-4, CompactPartyFrameMember1-5, CompactRaidFrame1-40 and TargetFrame
   (out of combat only; `Apply()` retried on PLAYER_REGEN_ENABLED, re-run on GROUP_ROSTER_UPDATE because compact frames appear/disappear). Turning the option off removes only the attributes we set.
   Option `followClick` (Quests tab > Group). Relies on the game honouring modifier attributes on its own secure unit frames and on `mouseover` being the clicked unit - not verified in game.
+- **v0.9.3**: Shift-click a teammate's name in the teammates' quests window follows them. `ApplyFollowButtons(list)` overlays pooled `SecureActionButtonTemplate` buttons
+  (`shift-type1="macro"`, `shift-macrotext1="/follow <name>"`) on name areas collected during `RefreshWindow` (`e.follow` for the by-player headers, `c.follow` for cells: the side-by-side
+  column headings and the "Players:" line, which is now cells, two names per row). Secure buttons can't be moved/changed in combat, so the call returns early then (they keep the last setup).
+  `KeyInGroup(key)` now also returns the plain in-game name used in the macro. Uses option `followClick`. Not verified in game.
+- **v0.10.0 MapQuestHints** (new file `Features/MapQuestHints.lua`, in both .tocs - full game restart once): "!" markers on the world map at the quest giver of quests teammates
+  FINISHED (blue) that you haven't, plus (option `mapQuestHintsHas`) quests they currently HAVE (green); greyed when `ns.WhyCantTake` says you can't take it (tooltip shows the first reason).
+  Data: `ns.QuestHints(includeHas)` (QuestShare: members' `done` sets / quests, minus my done/log) + `ns.QuestGiverPoints(id)` (QuestWhere: `startedBy` NPC/object spawns up to 12 points,
+  faction-filtered, cached; returns points, requiredLevel). Positions for the shown map: same uiMap directly, else via `GetWorldPosFromMapPos` -> `GetMapPosFromWorldPos(cont, pos, mapID)`
+  (only kept inside 0..1). Same-giver quests share a marker (grouped on a 1/150 grid). Marker layer sits in `sc.Child` and is raised above the map like MapDraw's (`RaiseLayer`, once a second).
+  Hints recomputed every 3 s while the map is open. Options `mapQuestHints` (+ "Hints: on/off" map button, order 36) and `mapQuestHintsHas`. Click = user waypoint on the giver.
+  Untested in game; the demo teammates' fake quests have no QuestieDB record so they can't show markers.
+- **v0.10.1 last-known log**: teammates' quests are saved in `P13TweaksDB.lastKnown[name] = { t, version, level, race, class, numQuests, quests, done }` (references to the live tables, so they
+  hold the last state when the teammate leaves; `RememberAll()` runs 5 s after data changes, when the group changes and after a list is applied; pruned to 30 days / 12 people by `PruneKnown`).
+  `SyncGhosts()` (login, roster changes, list applied, 1 s after any message) puts saved teammates with no live data into `members` as `ghost = true` (`lastSeen`); a message from a ghost's name
+  drops the ghost. Ghosts show in every view tagged "(last known 2 h ago)" / "(offline)" and count for Catch up, side-by-side, by-quest, by-player and the map hints; they are skipped by: Modern(),
+  NeededBySomeone / Share all, the plan's `Others()` (share / ask / blocked), tooltips, follow buttons, "Ask again" (live only via `FindMember(name, true)`) and the group-leave prune. Option
+  `questShareRemember` (off deletes the saved copies). Not tested with a real second player.
+- **v0.10.0 MapQuestHints** also in this push-set: see its entry above.
+- **v0.10.2**: the window's "Ask again" button is now **Sync**: "Syncing..." (disabled) while `IsSyncing()`, greyed "Synced" once a sync has finished and someone live is here
+  (`synced` flag: set by `ApplyIncoming` or when `StartSync`'s 8 s window ends with live teammates; cleared by `StartSync`), otherwise "Sync" (enabled; runs `AskAgain`). Button = `win.askBtn`, updated in `RefreshWindow`.
+- **v0.11.0 automatic sync (fingerprints)**: no manual sync button any more (replaced by a status text "Syncing..." / "Synced"; `/p13 sync` still exists as a fallback = old `AskAgain`).
+  Every client announces `F^<hash>^<n>` (`Fingerprint()` = djb-style hash of the sorted `EncodeRecord`s of its quest log) after its quests change (1 s debounce), after finishing a full list,
+  when the window opens and every 30 s (ticker). A receiver compares it with `Fingerprint(members[who].quests)` (`CheckFingerprint`); on mismatch it waits 3 s (a delta may be in
+  flight) and, if still different, sends `Y^<name>` (at most once per 20 s per person) and the named client answers with a full list (C...E). `F` from someone I have no live copy of
+  also triggers `Y`. Lists that came in the old `Q` format (`m.legacy`) are not compared. `m.sync` = true/false/nil feeds the status text. Opening the window no longer sends hello/full.
+  Also: quests I hold that a teammate already finished are flagged ("- finished by Ann" in by-quest / by-player, "[done]" in side by side, a chat line when the "D" arrives, Catch up section).

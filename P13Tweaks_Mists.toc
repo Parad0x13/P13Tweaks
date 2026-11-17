@@ -2,7 +2,7 @@
 ## Title: P13Tweaks
 ## Notes: Personal quality-of-life tweaks. Type /p13 to open options.
 ## Author: bryan
-## Version: 0.9.2
+## Version: 0.11.0
 ## SavedVariables: P13TweaksDB
 ## OptionalDeps: QuestieDB
 
@@ -23,6 +23,7 @@ Features\MinimapTownsfolk.lua
 Features\FlightPoints.lua
 Features\MapRoute.lua
 Features\MapDraw.lua
+Features\MapQuestHints.lua
 Features\FishKey.lua
 Features\KillsToLevel.lua
 Features\ChatFade.lua

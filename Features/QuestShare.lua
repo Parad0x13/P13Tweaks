@@ -18,6 +18,10 @@
 --   (V is only sent when every group member known to run P13Tweaks is on 0.9.0+; otherwise Q, as above)
 --   R^<id>             that quest left my log
 --   X                  I turned sharing off: forget me
+--   F^<hash>^<n>       (0.11.0+) fingerprint of my quest log (hash of every quest record, n quests): sent after my quests change,
+--                      after a full list and every 30 s. Teammates compare it with their copy of my quests; a mismatch that
+--                      persists 3 s makes them answer with Y
+--   Y^<name>           "<name>, please resend your full list" (answered with C ... E)
 --   D^<id>             I've already finished that quest (sent only for quests someone in the group
 --                      has had, so the window can tell "not started" from "already done")
 -- The window (/p13 quests) has two views: by quest (every quest anyone has, with where each player
@@ -37,6 +41,10 @@ ns.HasQuest = function(id) return myQuests[id] ~= nil end   -- used by QuestWher
 local lastSent = {}   -- id -> the message we last sent for that quest
 local warned = {}     -- name -> true once we've said their P13Tweaks is a different version
 local incoming = {}   -- full lists still arriving (see the Receiving section)
+local noticed = {}    -- "name:questId" -> true once I've said a teammate finished a quest I have
+local lastF = {}      -- name -> { hex, n, at }: the quest-log fingerprint a teammate last announced
+local askedY = {}     -- name -> when I last asked them to resend their list
+local CheckFingerprint   -- set further down
 local wanted = {}     -- quest id -> true: a teammate's quest whose title/objective wording I don't have yet
 local askedAt = {}    -- quest id -> when I last asked the group for its wording
 local sentText = {}   -- quest id -> when I last sent its wording to the group
@@ -46,6 +54,8 @@ local seen = {}       -- id -> title: every quest anyone in the group has had in
 local sentDone = {}   -- id -> true once I've told the group I finished it
 local RefreshWindow   -- set further down
 local ReportDone      -- set further down
+local RememberAll     -- set further down: saves teammates' last known quests
+local SyncGhosts      -- set further down: shows saved quests of teammates who aren't here
 
 local function Sharing() return ns:Get("questShare") end
 
@@ -249,7 +259,7 @@ end
 -- send the old one-message-per-quest format to everyone, which every version understands.)
 local function Modern()
     for _, m in pairs(members) do
-        if not m.demo and not VerAtLeast(m.version, MODERN) then return false end
+        if not m.demo and not m.ghost and not VerAtLeast(m.version, MODERN) then return false end
     end
     for _, p in pairs(incoming) do
         if not VerAtLeast(p.m.version, MODERN) then return false end
@@ -338,6 +348,29 @@ local function SendProfile()
     Send(("P^%d^%d^%d^%d"):format(UnitLevel("player") or 0, raceId or 0, classId or 0, n))
 end
 
+-- A quick "hash check" of a quest log: a short fingerprint of every quest's id, state and counts. Two clients that
+-- hold the same list get the same fingerprint, so a teammate's "F" message tells me in a few bytes whether my copy
+-- of their log is complete and current - no need to resend anything when it matches.
+local function Fingerprint(quests)
+    local ids = {}
+    for id in pairs(quests) do ids[#ids + 1] = id end
+    table.sort(ids)
+    local h = 5381
+    for _, id in ipairs(ids) do
+        local rec = EncodeRecord(id, quests[id]) .. ";"
+        for i = 1, #rec do h = (h * 33 + rec:byte(i)) % 4294967296 end
+    end
+    return ("%04x%04x"):format(math.floor(h / 65536), h % 65536), #ids
+end
+
+-- Announce my fingerprint (a ~20-byte message): teammates compare it with their copy of my quests and ask me to
+-- resend if it differs. Sent after my quests change, when I finish a full list, and every 30 s as a heartbeat.
+local function SendFingerprint()
+    if not (Sharing() and Channel()) then return end
+    local hex, n = Fingerprint(myQuests)
+    Send("F^" .. hex .. "^" .. n)
+end
+
 -- Re-reads my quest log; when sharing, sends only what changed since last time.
 local function UpdateMine()
     local quests, collapsed = Snapshot()
@@ -362,6 +395,7 @@ local function UpdateMine()
     for _ in pairs(quests) do count = count + 1 end
     if count ~= lastCount then SendProfile() end   -- my quest log filled up or emptied
     Later("done", 3, function() ReportDone() end)
+    Later("fp", 1, function() SendFingerprint() end)   -- tell teammates what my list now looks like
     Later("window", 0.2, function() RefreshWindow() end)
 end
 
@@ -390,6 +424,7 @@ local function SendFull()
     UpdateMine()
     ReportDone()
     Send("E")   -- end of my list: teammates show it (and everyone else's) all at once
+    SendFingerprint()
 end
 
 local function SayHello()
@@ -443,10 +478,19 @@ local ApplyIncoming
 -- "Syncing..." is shown from the moment I ask the group to resend until their lists have landed
 -- (or 8 s have passed with no answer), so a window that hasn't heard back yet never looks "in sync".
 local syncWait = 0
+local synced = false   -- the last sync finished and nothing has happened since that would need another
 local function IsSyncing() return next(incoming) ~= nil or GetTime() < syncWait end
+local function HasLive()   -- is anyone here whose quests I could be in sync with?
+    for _, m in pairs(members) do if not m.ghost then return true end end
+    return false
+end
 local function StartSync()
     syncWait = GetTime() + 8
-    C_Timer.After(8.2, function() RefreshWindow() end)
+    synced = false
+    C_Timer.After(8.2, function()
+        if next(incoming) == nil and GetTime() >= syncWait then synced = HasLive() end   -- nobody answered: nothing to be synced with
+        RefreshWindow()
+    end)
 end
 
 local function TryApply()
@@ -459,13 +503,19 @@ end
 ApplyIncoming = function()
     if next(incoming) == nil then return end
     stats.apply = stats.apply + 1
+    local applied = {}
     for who, p in pairs(incoming) do
         local old = members[who]
         if old and old.heard then p.m.heard = math.max(p.m.heard or 0, old.heard) end
         members[who] = p.m
         incoming[who] = nil
+        applied[#applied + 1] = who
     end
     syncWait = 0
+    synced = true
+    SyncGhosts()                          -- people who are back no longer need their saved copy shown
+    for _, who in ipairs(applied) do CheckFingerprint(who) end   -- does what I now hold match what they announced?
+    Later("remember", 3, function() RememberAll() end)
     RefreshWindow()
 end
 
@@ -531,6 +581,31 @@ CheckQuiet = function()
     TryApply()
 end
 
+-- Does my copy of a teammate's quest log match the fingerprint they announced? If not (even after a short wait,
+-- in case a change was still on its way), ask them to resend their list. This is what keeps everyone in sync
+-- without anyone pressing anything.
+CheckFingerprint = function(who)
+    local f, m = lastF[who], members[who]
+    if not f or not m or m.ghost or m.demo or incoming[who] or m.legacy then return end
+    if Fingerprint(m.quests) == f.hex then
+        if m.sync ~= true then m.sync = true; Later("window", 0.2, function() RefreshWindow() end) end
+        return
+    end
+    m.sync = false
+    Later("window", 0.2, function() RefreshWindow() end)
+    Later("fpcheck:" .. who, 3, function()
+        local f2, m2 = lastF[who], members[who]
+        if not f2 or not m2 or m2.ghost or incoming[who] then return end
+        if Fingerprint(m2.quests) == f2.hex then
+            m2.sync = true
+            RefreshWindow()
+        elseif not askedY[who] or GetTime() - askedY[who] > 20 then
+            askedY[who] = GetTime()
+            Send("Y^" .. who)   -- "please resend your list"
+        end
+    end)
+end
+
 -- Says so once if a teammate's P13Tweaks is a different version from mine.
 local function CheckVersion(who, ver)
     if not ver or ver == ns.version or warned[who .. ver] then return end
@@ -548,6 +623,7 @@ local function OnMessage(msg, sender)
     local kind = msg:sub(1, 1)
     stats.msg[kind] = (stats.msg[kind] or 0) + 1
     local m = members[who]
+    if m and m.ghost and kind ~= "F" then members[who] = nil; m = nil end   -- they're back: live data replaces the saved copy
     if kind == "H" then
         local proto = tonumber(msg:match("^H%^(%d+)"))
         if not m then m = { quests = {} }; members[who] = m end
@@ -631,6 +707,7 @@ local function OnMessage(msg, sender)
             t.quests[id] = q
             t.done = t.done or {}
             t.done[id] = nil
+            t.legacy = true                  -- their list came in the old format: its fingerprint can't be compared reliably
             CacheText(id, q.title, q.objs)   -- an old-format message carries the wording: keep it
             Track(id, q.title)
             Later("done", 2, function() ReportDone() end)   -- if I've finished it, say so
@@ -642,6 +719,24 @@ local function OnMessage(msg, sender)
             if not t then t = { quests = {} }; members[who] = t end
             t.level, t.race, t.class, t.numQuests = tonumber(lvl), tonumber(race), tonumber(class), tonumber(n)
         end
+    elseif kind == "F" then
+        -- a teammate's fingerprint: compare with my copy of their quests
+        local hex, n = msg:match("^F%^(%x+)%^(%d+)")
+        if hex then
+            lastF[who] = { hex = hex, n = tonumber(n), at = GetTime() }
+            if not m or m.ghost then
+                -- I have no live copy of them at all: ask for their list
+                if not incoming[who] and (not askedY[who] or GetTime() - askedY[who] > 20) then
+                    askedY[who] = GetTime()
+                    Send("Y^" .. who)
+                end
+            else
+                CheckFingerprint(who)
+            end
+        end
+    elseif kind == "Y" then
+        -- "<name>, please resend your list": it's me
+        if IsMe(msg:sub(3)) then Later("full", 1, SendFull) end
     elseif kind == "D" then
         local id = tonumber(msg:match("^D%^(%d+)"))
         if id then
@@ -649,6 +744,11 @@ local function OnMessage(msg, sender)
             if not t then t = { quests = {} }; members[who] = t end
             t.done = t.done or {}
             t.done[id] = true
+            -- a quest I have in my log that this teammate has already finished: say so once
+            if myQuests[id] and not noticed[who .. ":" .. id] then
+                noticed[who .. ":" .. id] = true
+                ns:Print(("%s has already finished \"%s\" - you have it in your quest log."):format(who, myQuests[id].title or "that quest"))
+            end
         end
     elseif kind == "R" then
         local id = tonumber(msg:match("^R%^(%d+)"))
@@ -662,6 +762,8 @@ local function OnMessage(msg, sender)
         incoming[who].last = now
         Later("quiet", 3.2, CheckQuiet)   -- an older P13Tweaks never says "end of list"
     end
+    Later("remember", 5, function() RememberAll() end)   -- keep the saved "last known" copy current
+    Later("ghosts", 1, function() SyncGhosts() end)
     -- While a list is still arriving the window waits; it refreshes once, when everything has landed.
     if next(incoming) == nil then Later("window", 0.2, function() RefreshWindow() end) end
 end
@@ -699,10 +801,10 @@ local function KeyInGroup(key)
             local n = Norm(name)
             if n ~= "" then
                 local r = (realm and realm ~= "") and Norm(realm) or myRealm
-                if k == n or k == n .. r then return true end
+                if k == n or k == n .. r then return true, name end   -- second result: their plain in-game name
                 if k:sub(1, #n) == n then
                     local rest = k:sub(#n + 1)
-                    if rest ~= "" and r:sub(1, #rest) == rest then return true end
+                    if rest ~= "" and r:sub(1, #rest) == rest then return true, name end
                 end
             end
         end
@@ -711,26 +813,108 @@ local function KeyInGroup(key)
 end
 
 -- The stored data for a group member by their plain name, whichever way it was keyed.
-local function FindMember(name)
-    if members[name] then return members[name], name end
+local function FindMember(name, liveOnly)
+    if members[name] and not (liveOnly and members[name].ghost) then return members[name], name end
     local n = Norm(name)
     for key, m in pairs(members) do
         local k = Norm(key)
-        if k == n or k:sub(1, #n) == n then return m, key end
+        if (k == n or k:sub(1, #n) == n) and not (liveOnly and m.ghost) then return m, key end
+    end
+end
+
+---------------------------------------------------------------------------
+-- Last known quests of teammates who aren't here right now
+---------------------------------------------------------------------------
+-- Each teammate's quests are saved (P13TweaksDB.lastKnown) as they play. When they're offline or have left the group
+-- they still show in the quests window, tagged "(last known 2 h ago)", so you can see what they've done and catch up.
+
+local function Remembering() return ns:Get("questShareRemember") end
+
+local function SavedKnown()
+    P13TweaksDB.lastKnown = P13TweaksDB.lastKnown or {}
+    return P13TweaksDB.lastKnown
+end
+
+-- "5 min ago", "3 h ago", "2 days ago"
+local function Ago(t)
+    local d = time() - (t or 0)
+    if d < 90 then return "just now" end
+    if d < 5400 then return math.floor(d / 60 + 0.5) .. " min ago" end
+    if d < 129600 then return math.floor(d / 3600 + 0.5) .. " h ago" end
+    return math.floor(d / 86400 + 0.5) .. " days ago"
+end
+
+local function GhostTag(m) return " |cff808080(last known " .. Ago(m.lastSeen) .. ")|r" end
+
+-- Saves (a reference to) every live teammate's data. The tables keep updating while the teammate is here and stop
+-- when they leave, so what's saved is their last known state.
+RememberAll = function()
+    if not Remembering() then return end
+    local saved = SavedKnown()
+    for key, m in pairs(members) do
+        if not m.demo and not m.ghost and next(m.quests) ~= nil then   -- (an empty list may just mean "not sent yet")
+            saved[key] = { t = time(), version = m.version, level = m.level, race = m.race, class = m.class,
+                numQuests = m.numQuests, quests = m.quests, done = m.done or {} }
+        end
+    end
+end
+
+-- Forget old entries: older than 30 days, or beyond the 12 most recent.
+local function PruneKnown()
+    local saved = SavedKnown()
+    local cutoff = time() - 30 * 86400
+    local list = {}
+    for key, s in pairs(saved) do
+        if type(s) ~= "table" or type(s.quests) ~= "table" or (s.t or 0) < cutoff then
+            saved[key] = nil
+        else
+            list[#list + 1] = { key = key, t = s.t or 0 }
+        end
+    end
+    if #list > 12 then
+        table.sort(list, function(a, b) return a.t > b.t end)
+        for i = 13, #list do saved[list[i].key] = nil end
+    end
+end
+
+-- Puts saved teammates who have no live data now into `members`, flagged ghost = true (and removes ghosts that
+-- aren't needed any more). Ghosts show in the windows but are never offered quests to share, never asked, never counted.
+SyncGhosts = function()
+    for key, m in pairs(members) do if m.ghost then members[key] = nil end end
+    if not (Remembering() and Sharing()) then return end
+    for key, s in pairs(SavedKnown()) do
+        if type(s) == "table" and type(s.quests) == "table" and not IsMe(key) then
+            local n, live = Norm(key), false
+            for k2, m in pairs(members) do
+                local kk = Norm(k2)
+                if not m.ghost and (kk == n or kk:sub(1, #n) == n or n:sub(1, #kk) == kk) then live = true; break end
+            end
+            if not live then
+                members[key] = { quests = s.quests, done = s.done or {}, ghost = true, lastSeen = s.t, version = s.version,
+                    level = s.level, race = s.race, class = s.class, numQuests = s.numQuests }
+                -- count their quests / finished quests as seen in the group (so "Catch up" and the map hints can use them)
+                for id, q in pairs(s.quests) do Track(id, q.title) end
+                for id in pairs(s.done or {}) do if not seen[id] then seen[id] = true end end
+            end
+        end
     end
 end
 
 local function OnRoster()
     if not Channel() then
         wipe(roster); wipe(queue); wipe(lastSent); wipe(sentDone); wipe(seen); wipe(incoming)
+        RememberAll()   -- keep what we last knew of them before they disappear from the group
         for name, m in pairs(members) do if not m.demo then members[name] = nil end end
+        SyncGhosts()    -- ...and show it, tagged "last known"
         RefreshWindow()
         return
     end
     local now = GroupNames()
+    RememberAll()
     for name, m in pairs(members) do
-        if not m.demo and not KeyInGroup(name) then members[name] = nil end   -- left the group
+        if not m.demo and not m.ghost and not KeyInGroup(name) then members[name] = nil end   -- left the group
     end
+    SyncGhosts()
     for name in pairs(incoming) do
         if not KeyInGroup(name) then incoming[name] = nil end
     end
@@ -842,7 +1026,7 @@ end
 -- and could actually accept it)?
 local function NeededBySomeone(id)
     for name, m in pairs(members) do
-        if not m.demo and not m.quests[id] and not (m.done and m.done[id]) and #WhyNot(m, name, id) == 0 then
+        if not m.demo and not m.ghost and not m.quests[id] and not (m.done and m.done[id]) and #WhyNot(m, name, id) == 0 then
             return true
         end
     end
@@ -880,7 +1064,7 @@ local function AskAgain()
         table.sort(names)
         local lines = {}
         for _, name in ipairs(names) do
-            local m = FindMember(name)   -- stored under whichever spelling their messages used
+            local m = FindMember(name, true)   -- live data only (stored under whichever spelling their messages used)
             local line
             if m and m.heard and m.heard >= t0 then
                 local n = 0
@@ -1035,15 +1219,11 @@ local function BuildWindow()
     diffBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
     win.diffBtn = diffBtn
 
-    local ask = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
-    ask:SetSize(90, 20)
-    ask:SetPoint("TOPRIGHT", -12, -32)
-    ask:SetText("Ask again")
-    ask:SetScript("OnClick", function()
-        if not Sharing() then ns:Print("Quest sharing is off - turn it on in /p13."); return end
-        if not Channel() then ns:Print("You're not in a group."); return end
-        AskAgain()
-    end)
+    -- Syncing is automatic; this just shows where it stands ("Syncing..." / "Synced").
+    local status = win:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    status:SetPoint("TOPRIGHT", -14, -36)
+    status:SetJustifyH("RIGHT")
+    win.syncText = status
 
     local scroll = CreateFrame("ScrollFrame", nil, win, "UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT", 10, -58)
@@ -1059,14 +1239,12 @@ local function BuildWindow()
     emptyText:SetWordWrap(true)
 
     win:Hide()   -- a new frame starts shown; callers show it (otherwise the first toggle would hide it)
-    -- Opening the window re-syncs with the group (quietly, at most once every 10 s).
-    local lastAuto = 0
+    -- Opening the window just does a quick check: announce my fingerprint, and compare the ones I already have.
+    -- Anything that doesn't match is re-sent automatically (see CheckFingerprint); nobody has to press anything.
     win:SetScript("OnShow", function()
-        if Sharing() and Channel() and GetTime() - lastAuto > 10 then
-            lastAuto = GetTime()
-            StartSync()                  -- show "Syncing..." until the answers are in
-            SayHello()                   -- everyone with P13Tweaks sends me their list again...
-            Later("full", 1, SendFull)   -- ...and I send them mine
+        if Sharing() and Channel() then
+            SendFingerprint()
+            for who in pairs(members) do CheckFingerprint(who) end
         end
         RefreshWindow()
     end)
@@ -1096,18 +1274,46 @@ end
 -- First line of the by-quest and sync-plan views: everyone in the group who shares quests, each once
 -- (you first, then teammates alphabetically), with their P13Tweaks version.
 local function PlayersLine(out, names)
-    local seenName, parts = {}, {}
-    local function Add(name, label)
-        if not seenName[name] then seenName[name] = true; parts[#parts + 1] = label end
+    local seenName, items = {}, {}
+    local function Add(name, label, follow)
+        if not seenName[name] then seenName[name] = true; items[#items + 1] = { label = label, follow = follow } end
     end
     local me = UnitName("player") or "?"
-    Add(me, NameColor("player") .. MyName() .. "|r" .. VerTag(ns.version))
+    Add(me, NameColor("player") .. MyName() .. "|r" .. VerTag(ns.version), nil)   -- can't follow yourself
     for _, name in ipairs(names) do
         if not IsMe(name) then
-            Add(name, NameColor(name) .. name .. "|r" .. VerTag(members[name] and members[name].version))
+            local pm = members[name]
+            local ghost = pm and pm.ghost
+            Add(name, NameColor(name) .. name .. "|r" .. (ghost and " |cff808080(offline)|r" or VerTag(pm and pm.version)),
+                (not ghost) and name or nil)
         end
     end
-    table.insert(out, { "|cff808080Players:|r " .. table.concat(parts, "   "), 0, 0 })
+    -- two names per row; Shift-click a teammate's name to follow them (see ApplyFollowButtons)
+    local LABEL, CW, PER_ROW = 60, 140, 2
+    for i = 1, #items, PER_ROW do
+        local row = { i == 1 and "|cff808080Players:|r" or "", 0, i == 1 and 0 or 2, cells = {}, titleW = LABEL, nowrap = true }
+        for j = i, math.min(i + PER_ROW - 1, #items) do
+            row.cells[#row.cells + 1] = { x = LABEL + (j - i) * CW, w = CW, text = items[j].label, follow = items[j].follow }
+        end
+        table.insert(out, row)
+    end
+end
+
+-- Teammates who have already FINISHED quest `id` (and don't hold it any more), while I haven't - or nil.
+-- Used to flag quests in my log that someone else has already done.
+local function FinishedBy(id)
+    if Completed(id) then return nil end
+    local names = {}
+    for key, m in pairs(members) do
+        if not m.demo and not (m.quests and m.quests[id]) and m.done and m.done[id] then names[#names + 1] = key end
+    end
+    table.sort(names)
+    return #names > 0 and names or nil
+end
+
+local function FinishedBadge(id)
+    local n = FinishedBy(id)
+    return n and (" |cff40c0ff- finished by " .. table.concat(n, ", ") .. "|r") or ""
 end
 
 -- By quest: every quest anyone has, with each player's place on it - including players who haven't started it.
@@ -1137,7 +1343,7 @@ local function BuildByQuest(out)
     table.sort(ids, function(a, b) return title[a] < title[b] end)
 
     local missing = {}
-    for name in pairs(GroupNames()) do if not FindMember(name) then table.insert(missing, name) end end
+    for name in pairs(GroupNames()) do if not FindMember(name, true) then table.insert(missing, name) end end
     table.sort(missing)
     table.insert(out, { "|cff808080Click one of your quests to track it (Shift-click shares it); click one you don't have to see how to get it.|r", 0, 2 })
     if #missing > 0 then
@@ -1146,13 +1352,14 @@ local function BuildByQuest(out)
     if #ids == 0 then table.insert(out, { "|cff808080(nobody has any quests)|r", 0, 8 }) end
 
     for _, id in ipairs(ids) do
-        table.insert(out, { "|cffffd200" .. title[id] .. "|r", 0, 10, myQuests[id] and id or nil,
+        table.insert(out, { "|cffffd200" .. title[id] .. "|r" .. FinishedBadge(id), 0, 10, myQuests[id] and id or nil,
             guide = (not myQuests[id]) and id or nil })
         for _, p in ipairs(players) do
             if p.name ~= "You" then   -- you're already in your own quest log; only show teammates
                 local q = p.quests[id]
                 local status = q and Summary(q) or (p.isDone(id) and "|cff40c0ffalready completed|r") or "|cff808080not started|r"
-                table.insert(out, { p.color .. p.name .. "|r" .. VerTag(members[p.name].version) .. ": " .. status, 14, 1 })
+                local pm = members[p.name]
+                table.insert(out, { p.color .. p.name .. "|r" .. (pm.ghost and " |cff808080(offline)|r" or VerTag(pm.version)) .. ": " .. status, 14, 1 })
             end
         end
     end
@@ -1166,7 +1373,8 @@ local function BuildByPlayer(out)
 
     for _, name in ipairs(names) do
         local m = members[name]
-        table.insert(out, { NameColor(name) .. name .. "|r" .. VerTag(m.version), 0, #out > 0 and 14 or 0 })
+        table.insert(out, { NameColor(name) .. name .. "|r" .. (m.ghost and GhostTag(m) or VerTag(m.version)),
+            0, #out > 0 and 14 or 0, follow = (not m.ghost) and name or nil })
         local list = SortedQuests(m.quests)
         if #list == 0 then table.insert(out, { "|cff808080(no quests)|r", 12, 2 }) end
         for _, e in ipairs(list) do
@@ -1175,6 +1383,7 @@ local function BuildByPlayer(out)
             if q.state == 1 then t = t .. " |cff40ff40(ready to turn in)|r"
             elseif q.state == -1 then t = t .. " |cffff4040(failed)|r" end
             if myQuests[e.id] and not m.demo then t = t .. " |cff8fa8ff(you have it too)|r" end
+            t = t .. FinishedBadge(e.id)
             table.insert(out, { t, 12, 4, myQuests[e.id] and e.id or nil, guide = (not myQuests[e.id]) and e.id or nil })
             if q.state ~= 1 then
                 for _, o in ipairs(q.objs) do
@@ -1224,7 +1433,7 @@ local function BuildCompare(out)
     if #names == 0 then return end
     for _, name in ipairs(names) do
         local m = members[name]
-        table.insert(players, { name = name, color = NameColor(name), quests = m.quests, version = m.version,
+        table.insert(players, { name = name, color = NameColor(name), quests = m.quests, version = m.version, ghost = m.ghost,
             isDone = function(id) return m.done and m.done[id] end })
     end
     local n = #players
@@ -1265,8 +1474,8 @@ local function BuildCompare(out)
     -- header
     local head = { "|cff808080Quest|r", 0, 0, nil, cells = {}, titleW = CMP_TITLE, nowrap = true }
     for i, p in ipairs(players) do
-        table.insert(head.cells, { x = CMP_TITLE + (i - 1) * CMP_COL, w = CMP_COL,
-            text = p.color .. p.name .. "|r\n" .. VerTag(p.version):gsub("^ ", "") })
+        table.insert(head.cells, { x = CMP_TITLE + (i - 1) * CMP_COL, w = CMP_COL, follow = (not p.ghost) and p.name or nil,
+            text = p.color .. p.name .. "|r\n" .. (p.ghost and "|cff808080offline|r" or VerTag(p.version):gsub("^ ", "")) })
     end
     table.insert(head.cells, { x = gapX, w = CMP_GAP, text = "|cff808080gap|r" })
     table.insert(out, head)
@@ -1275,7 +1484,7 @@ local function BuildCompare(out)
     for _, r in ipairs(rows) do
         if r.differs or not diffOnly then
             shown = shown + 1
-            local e = { (r.differs and "|cffffd200" or "|cffa0a070") .. title[r.id] .. "|r", 0, 5,
+            local e = { (FinishedBy(r.id) and "|cff40c0ff[done]|r " or "") .. (r.differs and "|cffffd200" or "|cffa0a070") .. title[r.id] .. "|r", 0, 5,
                 myQuests[r.id] and r.id or nil, cells = {}, titleW = CMP_TITLE, nowrap = true,
                 guide = (not myQuests[r.id]) and r.id or nil }
             for i = 1, n do
@@ -1314,20 +1523,23 @@ local function BuildPlan(out)
     local players = { { me = true, quests = myQuests, isDone = Completed } }
     for _, name in ipairs(names) do
         local m = members[name]
-        table.insert(players, { name = name, m = m, quests = m.quests,
+        table.insert(players, { name = name, m = m, quests = m.quests, ghost = m.ghost,
             isDone = function(id) return m.done and m.done[id] end })
     end
     -- your own character name (in your class colour) is used wherever the plan refers to you
     local myLabel = NameColor("player") .. MyName() .. "|r"
-    local function Label(p) return p.me and myLabel or (NameColor(p.name) .. p.name .. "|r") end
+    local function Label(p)
+        if p.me then return myLabel end
+        return NameColor(p.name) .. p.name .. "|r" .. (p.ghost and " |cff808080(offline)|r" or "")
+    end
     local function Labels(list)
         local t = {}
         for _, p in ipairs(list) do t[#t + 1] = Label(p) end
         return table.concat(t, ", ")
     end
-    local function Others(list)   -- teammates only
+    local function Others(list)   -- teammates who are here (offline ones can't be given or asked for anything)
         local t = {}
-        for _, p in ipairs(list) do if not p.me then t[#t + 1] = p end end
+        for _, p in ipairs(list) do if not p.me and not p.ghost then t[#t + 1] = p end end
         return t
     end
 
@@ -1489,17 +1701,66 @@ local function BuildPlan(out)
         table.insert(out, { "|cff40ff40Everyone is on the same quests at the same point - nothing to do.|r", 0, 0 })
     end
     local missing = {}
-    for name in pairs(GroupNames()) do if not FindMember(name) then table.insert(missing, name) end end
+    for name in pairs(GroupNames()) do if not FindMember(name, true) then table.insert(missing, name) end end
     table.sort(missing)
     if #missing > 0 then
         table.insert(out, { "|cff808080No P13Tweaks (can't be compared): " .. table.concat(missing, ", ") .. "|r", 0, 12 })
     end
 end
 
+-- Shift-click a teammate's name in this window to follow them. Following needs a secure button, and
+-- secure buttons can only be moved / changed out of combat, so during combat they keep their last setup.
+local fbtns = {}
+local function ApplyFollowButtons(list)
+    if InCombatLockdown() then return end
+    local on = ns:Get("followClick")
+    for i, f in ipairs(list) do
+        local b = fbtns[i]
+        if not b then
+            b = CreateFrame("Button", nil, content, "SecureActionButtonTemplate")
+            b:RegisterForClicks("AnyUp")
+            b:SetScript("OnEnter", function(self)
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:SetText("Shift-click to follow " .. (self.followName or "?"), 1, 1, 1)
+                GameTooltip:Show()
+            end)
+            b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+            fbtns[i] = b
+        end
+        local _, uname = KeyInGroup(f.key)   -- their plain in-game name, whichever way their messages spelled it
+        uname = uname or f.key
+        b.followName = uname
+        b:ClearAllPoints()
+        b:SetPoint("TOPLEFT", content, "TOPLEFT", f.x, -f.y)
+        b:SetSize(math.max(20, f.w), math.max(10, f.h))
+        b:SetAttribute("shift-type1", on and "macro" or nil)
+        b:SetAttribute("shift-macrotext1", on and ("/follow " .. uname) or nil)
+        b:SetShown(on and true or false)
+    end
+    for i = #list + 1, #fbtns do fbtns[i]:Hide() end
+end
+
 RefreshWindow = function()
     if not (win and win:IsShown()) then return end
     local mode = ViewMode()
     win.viewBtn:SetText(VIEW_LABEL[mode])
+    -- Sync status (automatic): "Syncing..." while lists are arriving or a teammate's copy doesn't match their
+    -- fingerprint yet, "Synced" once every teammate's copy matches. Empty when there's nobody to compare with.
+    if win.syncText then
+        local anyFalse, anyTrue = false, false
+        for _, m in pairs(members) do
+            if not m.ghost and not m.demo then
+                if m.sync == false then anyFalse = true elseif m.sync then anyTrue = true end
+            end
+        end
+        if IsSyncing() or anyFalse then
+            win.syncText:SetText("|cffffd200Syncing...|r")
+        elseif anyTrue then
+            win.syncText:SetText("|cff40ff40Synced|r")
+        else
+            win.syncText:SetText("")
+        end
+    end
     win.diffBtn:SetShown(mode == "compare")
     win.diffBtn:SetText(ns:Get("questShareDiffOnly") and "Show: diffs" or "Show: all")
 
@@ -1545,6 +1806,7 @@ RefreshWindow = function()
 
     local y = 0
     local nb, nc = 0, 0
+    local follows = {}   -- name areas that can be Shift-clicked to follow that player
     for i, e in ipairs(out) do
         local fs = Line(i)
         y = y + e[3]
@@ -1579,8 +1841,13 @@ RefreshWindow = function()
             b:SetSize(e.titleW or (W - e[2]), h)
             b:Show()
         end
+        if e.follow then follows[#follows + 1] = { key = e.follow, x = e[2], y = y, w = fs:GetStringWidth() + 6, h = h } end
+        for _, c in ipairs(e.cells or {}) do
+            if c.follow then follows[#follows + 1] = { key = c.follow, x = c.x, y = y, w = c.w, h = h } end
+        end
         y = y + h
     end
+    ApplyFollowButtons(follows)
     for i = #out + 1, #lines do lines[i]:Hide() end
     for i = nb + 1, #btns do btns[i]:Hide() end
     for i = nc + 1, #cells do cells[i]:Hide() end
@@ -1613,7 +1880,7 @@ local function AddProgress(tt, name)
     local low = name:lower()
     local added = false
     for who, m in pairs(members) do
-        for _, q in pairs(m.quests) do
+        for _, q in pairs(m.ghost and {} or m.quests) do   -- (offline teammates' old progress isn't shown on tooltips)
             if q.state ~= 1 then
                 for _, o in ipairs(q.objs) do
                     if o[1]:lower():find(low, 1, true) then
@@ -1694,6 +1961,23 @@ ns:RegisterOption({
 })
 
 ns:RegisterOption({
+    key = "questShareRemember",
+    type = "toggle",
+    label = "Remember teammates' quests when they're offline",
+    tooltip = "Saves each teammate's quests as they play. When they're offline or not in your group, their last known quests still show in the teammates' quests window (tagged \"last known 2 h ago\") so you can catch up on what they've done. Kept for 30 days. Turning this off deletes the saved copies.",
+    default = true,
+    onChange = function(on)
+        if on then
+            SyncGhosts()
+        else
+            P13TweaksDB.lastKnown = nil
+            SyncGhosts()   -- removes the ghosts (nothing is remembered now)
+        end
+        RefreshWindow()
+    end,
+})
+
+ns:RegisterOption({
     key = "questShareAuto",
     type = "toggle",
     label = "Auto-accept quests my group shares with me",
@@ -1705,7 +1989,42 @@ ns:RegisterCommand("quests", "show your teammates' quests and progress", functio
     ToggleWindow()
 end)
 
-ns:RegisterCommand("questsdebug", "show how the addon sees your name and your teammates' names (for duplicate-name problems)", function()
+-- For the map hints (MapQuestHints.lua): quests a teammate finished ("done") - and, if includeHas, quests a teammate
+-- has in their log ("has") - that I haven't done and don't have. Each: { id, title, done = {names}, has = {names}, reasons = {why I can't take it} }.
+function ns.QuestHints(includeHas)
+    local byId = {}
+    local function Note(id, field, who, title)
+        if myQuests[id] or Completed(id) then return end
+        local h = byId[id]
+        if not h then h = { id = id, done = {}, has = {} }; byId[id] = h end
+        h[field][#h[field] + 1] = who
+        if title and not h.title then h.title = title end
+    end
+    for key, m in pairs(members) do
+        if not m.demo then
+            for id in pairs(m.done or {}) do Note(id, "done", key) end
+            if includeHas then
+                for id, q in pairs(m.quests) do Note(id, "has", key, q.title) end
+            end
+        end
+    end
+    local list = {}
+    for id, h in pairs(byId) do
+        h.title = h.title or (type(seen[id]) == "string" and seen[id]) or (ns.QuestName and ns.QuestName(id)) or ("Quest " .. id)
+        h.reasons = (ns.WhyCantTake and ns.WhyCantTake(id)) or {}
+        list[#list + 1] = h
+    end
+    table.sort(list, function(a, b) return a.id < b.id end)
+    return list
+end
+
+ns:RegisterCommand("sync", "ask your group to resend their quests right now (syncing is automatic; this is a fallback)", function()
+    if not Sharing() then ns:Print("Quest sharing is off - turn it on in /p13."); return end
+    if not Channel() then ns:Print("You're not in a group."); return end
+    AskAgain()
+end)
+
+ns:RegisterCommand("questsdebug","show how the addon sees your name and your teammates' names (for duplicate-name problems)", function()
     ns:Print(("UnitName: \"%s\" | GetUnitName: \"%s\" | realm: \"%s\" / \"%s\""):format(
         tostring(UnitName("player")), tostring(GetUnitName and GetUnitName("player", true)),
         tostring(GetRealmName and GetRealmName()), tostring(GetNormalizedRealmName and GetNormalizedRealmName())))
@@ -1816,6 +2135,9 @@ frame:RegisterEvent("PLAYER_LEVEL_UP")
 frame:SetScript("OnEvent", function(self, event, a1, a2, a3, a4)
     if event == "PLAYER_LOGIN" then
         pcall(HookTooltips)
+        pcall(PruneKnown)
+        pcall(SyncGhosts)   -- teammates who aren't here: show what we last knew
+        C_Timer.NewTicker(30, function() SendFingerprint() end)   -- heartbeat: teammates compare it with their copy of my quests
     elseif event == "PLAYER_LEVEL_UP" then
         Later("profile", 3, SendProfile)
     elseif event == "QUEST_DETAIL" then

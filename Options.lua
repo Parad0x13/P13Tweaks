@@ -15,6 +15,7 @@ local LAYOUT = {
         { "Look", { "mapTerrain", "mapTerrainLabels", "mapTerrainButton", "mapCaveView" } },
         { "Travel", { "mapRoute", "flightPoints", "flightPointsTaxi" } },
         { "Drawing", { "mapDraw", "mapDrawFade" } },
+        { "Teammates' quests", { "mapQuestHints", "mapQuestHintsHas" } },
     } },
     { name = "Combat", icon = "Interface\\Icons\\Ability_DualWield", sections = {
         { "Aggro range", { "aggroRange", "aggroBeep" } },
@@ -24,7 +25,7 @@ local LAYOUT = {
     } },
     { name = "Quests", icon = "Interface\\Icons\\INV_Scroll_03", sections = {
         { "Quest enemies", { "questMobArrow" } },
-        { "Group", { "questShare", "questShareTooltips", "questShareAuto", "questHow", "followClick" } },
+        { "Group", { "questShare", "questShareTooltips", "questShareRemember", "questShareAuto", "questHow", "followClick" } },
     } },
     { name = "Towns", icon = "Interface\\Icons\\INV_Misc_Bag_10", sections = {
         { "Townsfolk", { "minimapTownsfolk", "worldmapTownsfolk" } },

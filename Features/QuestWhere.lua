@@ -130,6 +130,48 @@ function ns.QuestName(id)
     return lib and Get(lib.Quest, id, "name") or nil
 end
 
+-- Where a quest is given: every spawn point (up to 12) of the NPCs / objects that start it, as
+-- { name, uiMap, x, y } with x, y in map percent; and the level it needs. Used by MapQuestHints.lua.
+local giverCache = {}
+function ns.QuestGiverPoints(id)
+    local c = giverCache[id]
+    if c then return c.points, c.level end
+    local lib = Lib()
+    if not lib then return {}, nil end
+    local points = {}
+    local sb = Get(lib.Quest, id, "startedBy")
+    local faction = (UnitFactionGroup("player") or ""):sub(1, 1)
+    local areaMap = ns.LoadAreaMap and ns.LoadAreaMap() or {}
+    local function Add(db, objId, checkFaction)
+        if not db then return end
+        if checkFaction then
+            local friendly = Get(db, objId, "friendlyToFaction")
+            if type(friendly) == "string" and faction ~= "" and not friendly:find(faction, 1, true) then return end
+        end
+        local name = Get(db, objId, "name")
+        local spawns = Get(db, objId, "spawns")
+        if type(spawns) ~= "table" then return end
+        for area, pts in pairs(spawns) do
+            local uiMap = areaMap[area]
+            if uiMap and uiMap ~= 0 and type(pts) == "table" then
+                for _, pt in ipairs(pts) do
+                    if #points < 12 and pt[1] and pt[2] and pt[1] >= 0 and pt[2] >= 0 then
+                        points[#points + 1] = { name = name, uiMap = uiMap, x = pt[1], y = pt[2] }
+                    end
+                end
+            end
+        end
+    end
+    if type(sb) == "table" then
+        for _, npc in ipairs(type(sb[1]) == "table" and sb[1] or {}) do Add(lib.Npc, npc, true) end
+        for _, obj in ipairs(type(sb[2]) == "table" and sb[2] or {}) do Add(lib.Object, obj, false) end
+    end
+    local level = Get(lib.Quest, id, "requiredLevel")
+    if type(level) ~= "number" or level < 1 then level = nil end
+    giverCache[id] = { points = points, level = level }
+    return points, level
+end
+
 function ns.WhyCantTake(id, who)
     local lib = Lib()
     if not lib then return nil end
