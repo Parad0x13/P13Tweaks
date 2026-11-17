@@ -1,5 +1,23 @@
 # P13Tweaks – Handoff (2026-11-17)
 
+## Handover summary (v0.13.4 - docs only change on top of v0.13.3)
+**NOTHING from v0.2.0 onward has been run in the game** (no Lua interpreter on this PC; every file was only read back, never executed). Expect load errors on first `/reload`:
+turn on `/console scriptErrors 1` and fix what the popups say. Several new files need a full game restart (they were added to the .tocs): MapDraw, MapQuestHints, FollowClick,
+TaggedMarks, QuestWhere, Version.lua. Version is kept in THREE places and bumped every update: `Version.lua`, and `## Version:` in both .tocs.
+- **Deploy model**: git clone + `link.ps1` junction only (the old copy installer is gone). The friend does `git pull` + `/reload` (restart only when the .toc file list changed).
+  Unrelated untracked/modified files in the folder (`Link P13Tweaks.bat`, `Update P13Tweaks.bat`, `.gitattributes`) are the user's own - never committed.
+- **Quest sharing** (the big one, `Features/QuestShare.lua`, ~2100 lines, prefix `P13Q`): compact `V` records + cached wording (`T`/`N`), `F` fingerprints with automatic resync (`Y`),
+  completed-quest history (`Z`/`K`), end-of-list marker `E`, `P` profile, `D` finished reports; "last known" ghosts of offline teammates; window views: by quest / side by side /
+  sync plan / by player; click your quest = track, Shift-click = share; Shift-click a teammate's name = follow. Older versions are still supported (old `Q` format used while anyone is old).
+  See the per-version bullets near the end of this file for design details (v0.2.0 ... v0.13.3).
+- **Map**: MapDraw (Shift + drag draws, shared, Undo/Clear mine/Clear all), MapQuestHints (markers for quests teammates did / have; gold "?" for my quests they finished,
+  at the work area, or the hand-in once I'm ready to turn in), minimap button; Center/Overlay/Draw buttons were removed on request.
+- **Other new**: FollowClick (Shift-click portraits / the world / names), TaggedMarks (skull above enemies teammates target), QuestWhere ("how do I get this quest" panel + data helpers).
+- **Ideas not built**: PartnerBags (share inventories; design discussed: item id x count lists + fingerprint, "who has X" tooltips, last-known copy), fingerprint-based skip of full lists
+  is DONE; per-version compatibility shims could be dropped once both players are on 0.13+.
+- **First things to check next session**: (1) any Lua error popups; (2) `/p13 questsdebug` counters while two clients are grouped (are hellos / full lists repeating?);
+  (3) does "Synced" appear; (4) map markers (needs QuestieDB); (5) `/p13 followdebug`; (6) nameplates on for TaggedMarks.
+
 ## What this is
 Personal quality-of-life addon for **WoW Forever** (`P13Tweaks.toc`, interface 16001) and
 **MoP Classic** (`P13Tweaks_Mists.toc`). Type `/p13` for the options window.
