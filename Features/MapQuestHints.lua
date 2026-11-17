@@ -34,12 +34,14 @@ end
 
 -- Where a quest's givers show on map mapID: { u, v (0..1 on that map), p = the giver point } for the ones that fall on it.
 local function PointsOn(hint, mapID)
-    local key = hint.id .. ":" .. mapID .. (hint.mine and "m" or "")
+    local key = hint.id .. ":" .. mapID .. (hint.mine and (hint.ready and "r" or "m") or "")
     local cached = convCache[key]
     if cached then return cached end
     local out = {}
-    -- a quest I have: mark where its work is done (what to kill / collect); one I could pick up: where it's given
-    local fn = hint.mine and ns.QuestObjectivePoints or ns.QuestGiverPoints
+    -- a quest I have: where its work is done (what to kill / collect) - or, once I've finished that work, where it's handed in;
+    -- one I could pick up: where it's given
+    local fn = ns.QuestGiverPoints
+    if hint.mine then fn = hint.ready and ns.QuestFinisherPoints or ns.QuestObjectivePoints end
     local pts = fn and fn(hint.id) or {}
     for _, p in ipairs(pts) do
         local u, v
@@ -55,7 +57,7 @@ local function PointsOn(hint, mapID)
         end
         if u and v and u >= 0 and u <= 1 and v >= 0 and v <= 1 then out[#out + 1] = { u = u, v = v, p = p } end
     end
-    if hint.mine and #out > 1 then
+    if hint.mine and not hint.ready and #out > 1 then
         -- the work area is many spawn points: one marker at the middle of the busiest cluster (within ~6 % of the map)
         local R2 = 0.0036
         local bestN, bestI = 0, 1
@@ -124,7 +126,8 @@ local function ShowTooltip(self)
         local lvl = e.level and ("  (level " .. e.level .. ")") or ""
         GameTooltip:AddLine(h.title .. lvl, 1, 0.82, 0)
         if h.mine then
-            GameTooltip:AddLine("   " .. Names(h.done) .. " already finished this - you have it (the area where it's done)", 1, 0.75, 0.25, true)
+            GameTooltip:AddLine("   " .. Names(h.done) .. " already finished this - "
+                .. (h.ready and "you've done its objectives: hand it in here" or "you have it (the area where it's done)"), 1, 0.75, 0.25, true)
         elseif #h.done > 0 then
             GameTooltip:AddLine("   " .. Names(h.done) .. " finished this", 0.4, 0.75, 1)
         end

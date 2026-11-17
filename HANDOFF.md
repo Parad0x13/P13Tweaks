@@ -384,3 +384,5 @@ quest enemy arrow, free keys, Zephras terrain, flight master map icons). Commit/
 - **v0.13.2**: the gold "?" for my quests that a teammate finished is now placed where the quest's WORK is done, not at the hand-in: `ns.QuestObjectivePoints(id)` (QuestWhere) gathers spawn points
   from QuestieDB `objectives` ([1] creatures, [2] objects, [3] items -> `npcDrops`, [5] kill-credit groups; <= 14 creatures, <= 6 points each, <= 60 total; falls back to the hand-in
   point), and MapQuestHints collapses the points on the shown map to ONE marker at the middle of the busiest cluster (within 6 % of the map). `ns.QuestFinisherPoints` is still the fallback.
+- **v0.13.3**: the gold "?" for my quests a teammate finished moves to the HAND-IN point once I've finished the quest's objectives (`q.state == 1` -> hint `.ready`, uses
+  `ns.QuestFinisherPoints`; otherwise still the work area via `QuestObjectivePoints` with the cluster collapse). Tooltip says which. `convCache` keys carry the ready flag.

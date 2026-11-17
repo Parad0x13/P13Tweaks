@@ -2196,7 +2196,8 @@ function ns.QuestHints(includeHas)
     -- which of my quests someone has already done
     for id, q in pairs(myQuests) do
         local who = FinishedBy(id)
-        if who then byId[id] = { id = id, done = who, has = {}, mine = true, title = q.title } end
+        -- ready = I've finished its objectives: the marker then goes to the hand-in instead of the work area
+        if who then byId[id] = { id = id, done = who, has = {}, mine = true, ready = (q.state == 1), title = q.title } end
     end
     local list = {}
     for id, h in pairs(byId) do
