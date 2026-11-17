@@ -197,3 +197,6 @@ quest enemy arrow, free keys, Zephras terrain, flight master map icons). Commit/
   copy; remote URL carries it), replaces the copied `AddOns\P13Tweaks` folder with a junction to the clone, and makes an
   "Update P13Tweaks" desktop shortcut that re-runs it (pull). Parse-checked only, not run. The old Update-P13Tweaks
   startup updater skips junctions, so it's harmless alongside.
+- **v0.3.3**: each player's name shows their P13Tweaks version (`VerTag`, red when it differs from yours) in both quest views.
+  "Ask again" now sends the hello, waits 6 s, and reports per group member: updated (N quests, version) / no answer /
+  no P13Tweaks - in chat and as a "Last check" block at the top of the window. Members get a `heard` timestamp on any message.

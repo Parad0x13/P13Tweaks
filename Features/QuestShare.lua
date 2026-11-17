@@ -294,6 +294,7 @@ local function OnMessage(msg, sender)
         local id = tonumber(msg:match("^R%^(%d+)"))
         if m and id then m.quests[id] = nil end
     end
+    if members[who] then members[who].heard = GetTime() end   -- for "Ask again": did they answer?
     Later("window", 0.2, function() RefreshWindow() end)
 end
 
@@ -345,6 +346,20 @@ local W = 340
 local win, content, emptyText
 local lines = {}
 local btns = {}
+local function NameColor(name)
+    local _, class = UnitClass(name)
+    local c = class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
+    if c and c.colorStr then return "|c" .. c.colorStr end
+    return "|cff33ff99"
+end
+
+local lastCheck   -- lines describing the result of the last "Ask again", shown at the top of the window
+
+-- " v0.3.2" after a player's name: grey when it matches mine, red when it doesn't.
+local function VerTag(v)
+    if not v then return " |cff808080v?|r" end
+    return (v == ns.version and " |cff808080v" or " |cffff6040v") .. v .. "|r"
+end
 
 local function ViewMode() return ns:Get("questShareView") == "player" and "player" or "quest" end
 
@@ -397,6 +412,40 @@ local function ShareAll()
     end
 end
 
+-- "Ask again": ask everyone to resend, wait a few seconds, then say who answered.
+local function AskAgain()
+    local t0 = GetTime()
+    lastCheck = { "|cff808080Checking...|r" }
+    RefreshWindow()
+    SayHello()
+    ns:Print("Asking your group...")
+    C_Timer.After(6, function()
+        local names = {}
+        for name in pairs(GroupNames()) do table.insert(names, name) end
+        table.sort(names)
+        local lines = {}
+        for _, name in ipairs(names) do
+            local m = members[name]
+            local line
+            if m and m.heard and m.heard >= t0 then
+                local n = 0
+                for _ in pairs(m.quests) do n = n + 1 end
+                line = ("|cff40ff40updated|r - %d quest%s%s"):format(n, n == 1 and "" or "s", VerTag(m.version))
+                if m.version and m.version ~= ns.version then line = line .. " |cffff6040(different version)|r" end
+            elseif m then
+                line = "|cffffd200no answer|r - still showing what they sent before"
+            else
+                line = "|cffff6040no P13Tweaks|r (or their quest sharing is off)"
+            end
+            table.insert(lines, NameColor(name) .. name .. "|r: " .. line)
+        end
+        if #lines == 0 then lines[1] = "Nobody else is in your group." end
+        lastCheck = lines
+        for _, l in ipairs(lines) do ns:Print(l) end
+        RefreshWindow()
+    end)
+end
+
 local function QuestButton(i)
     if btns[i] then return btns[i] end
     local b = CreateFrame("Button", nil, content)
@@ -424,13 +473,6 @@ local function Line(i)
     fs:SetWordWrap(true)
     lines[i] = fs
     return fs
-end
-
-local function NameColor(name)
-    local _, class = UnitClass(name)
-    local c = class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
-    if c and c.colorStr then return "|c" .. c.colorStr end
-    return "|cff33ff99"
 end
 
 local function BuildWindow()
@@ -479,8 +521,7 @@ local function BuildWindow()
     ask:SetScript("OnClick", function()
         if not Sharing() then ns:Print("Quest sharing is off - turn it on in /p13."); return end
         if not Channel() then ns:Print("You're not in a group."); return end
-        SayHello()
-        ns:Print("Asked your group to send their quests again.")
+        AskAgain()
     end)
 
     local scroll = CreateFrame("ScrollFrame", nil, win, "UIPanelScrollFrameTemplate")
@@ -566,7 +607,8 @@ local function BuildByQuest(out)
         for _, p in ipairs(players) do
             local q = p.quests[id]
             local status = q and Summary(q) or (p.isDone(id) and "|cff40c0ffalready completed|r") or "|cff808080not started|r"
-            table.insert(out, { p.color .. p.name .. "|r: " .. status, 14, 1 })
+            local ver = p.name == "You" and ns.version or members[p.name].version
+            table.insert(out, { p.color .. p.name .. "|r" .. VerTag(ver) .. ": " .. status, 14, 1 })
         end
     end
 end
@@ -579,7 +621,7 @@ local function BuildByPlayer(out)
 
     for _, name in ipairs(names) do
         local m = members[name]
-        table.insert(out, { NameColor(name) .. name .. "|r", 0, #out > 0 and 14 or 0 })
+        table.insert(out, { NameColor(name) .. name .. "|r" .. VerTag(m.version), 0, #out > 0 and 14 or 0 })
         local list = SortedQuests(m.quests)
         if #list == 0 then table.insert(out, { "|cff808080(no quests)|r", 12, 2 }) end
         for _, e in ipairs(list) do
@@ -605,6 +647,19 @@ RefreshWindow = function()
     -- Lines are { text, indent, gapBefore, questId (when clicking it shares that quest) }.
     local out = {}
     if ViewMode() == "quest" then BuildByQuest(out) else BuildByPlayer(out) end
+
+    -- Result of the last "Ask again" goes on top.
+    local checkText
+    if lastCheck then
+        if #out > 0 then
+            local top = { { "|cff808080Last check:|r", 0, 0 } }
+            for _, l in ipairs(lastCheck) do table.insert(top, { l, 8, 1 }) end
+            for i = #top, 1, -1 do table.insert(out, 1, top[i]) end
+            if out[#top + 1] then out[#top + 1][3] = math.max(out[#top + 1][3], 10) end
+        else
+            checkText = table.concat(lastCheck, "\n")
+        end
+    end
 
     local y = 0
     local nb = 0
@@ -635,7 +690,8 @@ RefreshWindow = function()
         local why = not Sharing() and "Quest sharing is off. Turn it on in /p13."
             or not Channel() and "You're not in a group."
             or "Nobody in your group is sharing quests yet."
-        emptyText:SetText(why .. "\n\nTeammates show up here when you're grouped and they have P13Tweaks too, with quest sharing on.")
+        emptyText:SetText(why .. "\n\nTeammates show up here when you're grouped and they have P13Tweaks too, with quest sharing on."
+            .. (checkText and ("\n\nLast check:\n" .. checkText) or ""))
         emptyText:Show()
         y = emptyText:GetStringHeight() + 8
     else
