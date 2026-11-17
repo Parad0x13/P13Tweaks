@@ -76,6 +76,9 @@ Personal quality-of-life addon for **WoW Forever** (`P13Tweaks.toc`, interface 1
 Git clone + junction only (no copy-based installer; it was removed in v0.3.6). Partner: install git, clone the repo
 (private: sign in / read-only token), run `link.ps1` (finds WoW on any drive, replaces a plain copied folder with a
 junction, idempotent). Updating = `git pull` + full WoW restart to see a new .toc version.
+**Her PC can't run PowerShell scripts**, so (v0.5.1) there are double-click equivalents: `Link P13Tweaks.bat`
+(same as link.ps1, pure cmd + `mklink /J`; tested on this PC) and `Update P13Tweaks.bat` (`git pull`). Both CRLF
+(`.gitattributes`). Keep link.ps1 and the .bat in step if either changes.
 Her PC may still hold leftovers from the removed installer: `%LOCALAPPDATA%\P13Tweaks\`, the Startup shortcut
 "P13Tweaks updater" and the desktop "Update P13Tweaks" shortcut. They are harmless (the updater skips links) but can be deleted.
 
@@ -227,3 +230,5 @@ quest enemy arrow, free keys, Zephras terrain, flight master map icons). Commit/
   QuestieDB field names are in `QuestieDB/src/meta/questMeta.lua` (`[2]='startedBy'`, `[12]='preQuestGroup'`, ...). Exports from
   QuestShare: `ns.QuestCompleted`, `ns.HasQuest`; window rows carry `.guide = questId`. Option `questHow`; command `/p13 questhow <id>`.
   Untested in game; the pretend teammates' fake quests (9990001/2) have no QuestieDB record by design.
+- **v0.5.1**: fixed "tap twice after /reload": `BuildWindow` left the new quests window shown, so the first `ToggleWindow`
+  hid it. It now `Hide()`s at the end of the build (callers show it).

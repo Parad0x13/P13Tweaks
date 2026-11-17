@@ -579,6 +579,7 @@ local function BuildWindow()
     emptyText:SetJustifyH("LEFT")
     emptyText:SetWordWrap(true)
 
+    win:Hide()   -- a new frame starts shown; callers show it (otherwise the first toggle would hide it)
     win:SetScript("OnShow", function() RefreshWindow() end)
 end
 
