@@ -276,3 +276,9 @@ quest enemy arrow, free keys, Zephras terrain, flight master map icons). Commit/
   finish first (prerequisites, the parent quest). `Blockers()` (QuestWhere) now returns `reasons, refs`; `ns.WhyCantTake` and `WhyNot` pass `refs` on;
   `ns.QuestName(id)` added. Clicking opens `ns.ShowQuestGuide(id, title, { forName = "Ann" })` = where that quest starts + waypoint, whatever
   your own progress on it is ("you've finished it yourself" / "it's in your log" are noted). Plan sub-lines may now be tables `{text, indent, guide, who}`.
+- **v0.7.2**: map drawing - "Undo" and "Clear mine" now show whenever you have lines on the map (not only in draw mode):
+  `UpdateButtons()` (called from `Changed()`); they hide again when your lines are gone/faded. `/p13 mapdraw clear all` also clears
+  teammates' lines from your own map (and sends the clear for yours).
+- **v0.7.3**: map drawing lines were visible only in the black border outside the map picture on the friend's PC (hidden behind the map's own
+  layers). The draw layer is now `sc.Child` level + 25 (was +16; route +18, flight points +20). If lines are STILL hidden, parent the layer to the
+  ScrollContainer / WorldMapFrame instead of `sc.Child` and convert coordinates (canvas scale + scroll) by hand.

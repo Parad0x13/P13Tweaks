@@ -32,7 +32,11 @@ local layer, catcher, drawBtn, undoBtn, clearBtn
 local linePool, linesUsed, lastSig = {}, 0, nil
 
 local function On() return ns:Get("mapDraw") end
-local function Changed() version = version + 1 end
+local UpdateButtons   -- set further down
+local function Changed()
+    version = version + 1
+    if UpdateButtons then UpdateButtons() end
+end
 
 local function Me() return UnitName("player") end
 
@@ -145,6 +149,14 @@ end
 ---------------------------------------------------------------------------
 
 local function Mine() local out = {} for _, s in ipairs(strokes) do if s.owner == Me() and not s.demo then out[#out + 1] = s end end return out end
+
+-- Undo and Clear mine show while drawing, and any time you have lines on the map (so you can always clear them).
+UpdateButtons = function()
+    if not (undoBtn and clearBtn) then return end
+    local want = On() and (drawing or #Mine() > 0) and true or false
+    if undoBtn:IsShown() ~= want then undoBtn:SetShown(want) end
+    if clearBtn:IsShown() ~= want then clearBtn:SetShown(want) end
+end
 
 local function AddStroke(s)
     table.insert(strokes, s)
@@ -380,8 +392,7 @@ local function SetDrawing(on)
         catcher:EnableMouse(on)
     end
     if drawBtn then drawBtn:SetText(on and "Stop drawing" or "Draw") end
-    if undoBtn then undoBtn:SetShown(on) end
-    if clearBtn then clearBtn:SetShown(on) end
+    UpdateButtons()
 end
 
 ---------------------------------------------------------------------------
@@ -418,7 +429,12 @@ ns:RegisterCommand("mapdraw", "map drawing: /p13 mapdraw clear (your lines), /p1
     arg = strtrim(arg or ""):lower()
     if arg == "clear" then
         ClearMine()
-        ns:Print("Your map lines are cleared.")
+        ns:Print("Your map lines are cleared (your group's copies too).")
+    elseif arg == "clear all" then
+        RemoveWhere(function() return true end)
+        ClearMine()
+        Send("X")
+        ns:Print("All map lines are cleared on your map, including your teammates'. They keep their own until they clear them.")
     elseif arg == "demo" then
         local had = RemoveWhere(function(s) return s.demo end)
         if had then ns:Print("Pretend teammates' lines removed."); return end
@@ -466,7 +482,9 @@ events:SetScript("OnEvent", function(_, event, a1, a2, a3, a4)
 
         layer = CreateFrame("Frame", nil, sc.Child)
         layer:SetPoint("TOPLEFT", sc.Child, "TOPLEFT")
-        layer:SetFrameLevel(sc.Child:GetFrameLevel() + 16)
+        -- High enough to sit above the map's own picture layers (a lower level was hidden behind the map
+        -- and only showed in the black border). Lines don't take the mouse, so being on top is harmless.
+        layer:SetFrameLevel(sc.Child:GetFrameLevel() + 25)
 
         -- Over the map while drawing, to catch the mouse. Right-click passes through where the game allows.
         catcher = CreateFrame("Frame", nil, sc)
