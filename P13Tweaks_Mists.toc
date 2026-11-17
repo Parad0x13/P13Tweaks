@@ -19,10 +19,14 @@ Features\RangeBeep.lua
 Features\ProfCap.lua
 Features\MinimapTownsfolk.lua
 Features\FlightPoints.lua
+Features\MapRoute.lua
+Features\MapOverlay.lua
 Features\FishKey.lua
 Features\KillsToLevel.lua
 Features\ChatFade.lua
 Features\ChatScroll.lua
 Features\SpellReady.lua
 Features\QuestShare.lua
+Features\QuestMobArrow.lua
+Features\FreeKeys.lua
 Options.lua

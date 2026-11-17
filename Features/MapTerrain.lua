@@ -1,6 +1,7 @@
 -- P13Tweaks feature: real terrain on the world map.
 -- Draws the game's own minimap terrain tiles (the same pictures the minimap uses) over the
--- painted continent and zone maps of Kalimdor and the Eastern Kingdoms. Only tiles in view are
+-- painted continent and zone maps of Kalimdor and the Eastern Kingdoms, and Forever's
+-- Zephras Isle (its own world, instance 2991). Any world in ns.TerrainTiles works. Only tiles in view are
 -- loaded, so it stays smooth while you zoom and pan. Pins (quests, flight points, trainers...)
 -- sit on top as usual, since the tiles use the same world coordinates.
 --
@@ -267,6 +268,177 @@ ns:RegisterOption({
     onChange = function() Refresh(true) end,
 })
 
+---------------------------------------------------------------------------
+-- Cave view: in caves the world map only has the outdoor zone, but the minimap draws the
+-- cave. While the map is open and you're indoors, borrow the real minimap: enlarge it over
+-- the map picture (square, zoomed out), and put it back when the map closes or you go
+-- outside. Mouse wheel over it zooms the minimap. The Cave view button switches back to the
+-- normal map until you next go indoors. (Buildings count as indoors too.)
+---------------------------------------------------------------------------
+
+-- (No panning: the minimap only draws a circle centred on you, and the game doesn't clip it
+-- at a frame's edges - a bigger, slid minimap spills over the rest of the screen. Tried and
+-- removed.)
+local cave = { active = false, userOff = false }
+local caveBack, caveCatch, caveButton, caveArrow
+
+-- Fit the borrowed minimap to the map window, centred.
+local function CaveLayout()
+    if not cave.active then return end
+    local base = math.min(caveBack:GetWidth(), caveBack:GetHeight())
+    if not base or base <= 0 then return end
+    Minimap:SetSize(base, base)
+    Minimap:ClearAllPoints()
+    Minimap:SetPoint("CENTER", caveBack, "CENTER")
+end
+
+-- Wheel: through the minimap's own zoom steps.
+local function CaveWheel(_, delta)
+    local levels = Minimap:GetZoomLevels() or 1
+    Minimap:SetZoom(math.max(0, math.min(levels - 1, Minimap:GetZoom() + delta)))
+end
+
+-- Indoors, on your own zone's map, and the game has no separate map for where you are.
+local function CavePossible()
+    if not (ns:Get("mapCaveView") and IsIndoors and IsIndoors()) then return false end
+    local best = C_Map.GetBestMapForUnit("player")
+    local info = best and C_Map.GetMapInfo(best)
+    if not info or (info.mapType and info.mapType > MAP_TYPE_ZONE) then return false end
+    return WorldMapFrame:GetMapID() == best
+end
+
+local function CaveStart()
+    local sc = WorldMapFrame.ScrollContainer
+    local m = Minimap
+    if cave.active or not (m and sc) then return end
+    cave.parent = m:GetParent()
+    cave.points = {}
+    for i = 1, m:GetNumPoints() do cave.points[i] = { m:GetPoint(i) } end
+    cave.w, cave.h = m:GetSize()
+    cave.scale, cave.zoom = m:GetScale(), m:GetZoom()
+    cave.strata, cave.level = m:GetFrameStrata(), m:GetFrameLevel()
+    cave.active = true
+
+    caveBack:Show()
+    m:SetParent(caveBack)
+    m:SetScale(1)
+    m:SetFrameStrata(sc:GetFrameStrata())
+    m:SetFrameLevel(caveBack:GetFrameLevel() + 2)
+    caveCatch:SetFrameLevel(caveBack:GetFrameLevel() + 20)   -- takes the wheel, above the minimap
+    CaveLayout()
+    -- (its round shape is left alone: the game won't say what mask it had, so it couldn't
+    -- be put back reliably)
+    m:SetZoom(0)                                        -- widest view of the cave
+    -- hide the minimap's decorations (compass ring, border, zoom/tracking/mail buttons...):
+    -- all its textures, and its NAMED child frames (the game's own); unnamed children are map
+    -- icons from addons (herbs, our townsfolk icons...) and stay
+    cave.hidden = {}
+    for _, r in ipairs({ m:GetRegions() }) do
+        cave.hidden[r] = r:GetAlpha()
+        r:SetAlpha(0)
+    end
+    for _, c in ipairs({ m:GetChildren() }) do
+        if c:GetName() and c ~= caveArrow then
+            cave.hidden[c] = c:GetAlpha()
+            c:SetAlpha(0)
+        end
+    end
+    -- decorations that belong to the frame around the minimap but are attached to it (they
+    -- move along): the +/- zoom buttons and friends. Also made unclickable meanwhile.
+    cave.unclick = {}
+    local extra = { _G.MinimapCompassTexture, _G.MinimapBorder, _G.MinimapBorderTop, _G.MinimapBackdrop,
+        _G.MinimapZoomIn, _G.MinimapZoomOut, m.ZoomIn, m.ZoomOut,
+        _G.MinimapCluster and _G.MinimapCluster.ZoomIn, _G.MinimapCluster and _G.MinimapCluster.ZoomOut }
+    for i = 1, 10 do
+        local obj = extra[i]
+        if obj and obj.SetAlpha and cave.hidden[obj] == nil then
+            cave.hidden[obj] = obj:GetAlpha()
+            obj:SetAlpha(0)
+            if obj.IsMouseEnabled and obj:IsMouseEnabled() then
+                obj:EnableMouse(false)
+                cave.unclick[obj] = true
+            end
+        end
+    end
+    -- the minimap's own player arrow doesn't come along; draw ours in the middle (you're
+    -- always at the centre of the minimap)
+    caveArrow:SetParent(m)
+    caveArrow:ClearAllPoints()
+    caveArrow:SetPoint("CENTER", m, "CENTER")
+    caveArrow:SetFrameLevel(m:GetFrameLevel() + 5)
+    caveArrow:Show()
+end
+
+local function CaveStop()
+    if not cave.active then return end
+    local m = Minimap
+    m:SetParent(cave.parent)
+    m:ClearAllPoints()
+    for _, p in ipairs(cave.points) do m:SetPoint(unpack(p)) end
+    m:SetScale(cave.scale)
+    m:SetSize(cave.w, cave.h)
+    m:SetFrameStrata(cave.strata)
+    m:SetFrameLevel(cave.level)
+    m:SetZoom(cave.zoom)
+    for obj, a in pairs(cave.hidden or {}) do obj:SetAlpha(a) end
+    for obj in pairs(cave.unclick or {}) do obj:EnableMouse(true) end
+    cave.hidden, cave.unclick = nil, nil
+    caveArrow:Hide()
+    caveBack:Hide()
+    cave.active = false
+end
+
+local function CaveCheck()
+    local possible = WorldMapFrame:IsShown() and CavePossible()
+    if not (IsIndoors and IsIndoors()) then cave.userOff = false end   -- outside again: reset
+    local want = possible and not cave.userOff
+    if want and not cave.active then CaveStart() elseif not want and cave.active then CaveStop() end
+    if caveButton then
+        local show = possible and true or false
+        if caveButton:IsShown() ~= show then caveButton:SetShown(show) end
+        caveButton:SetText(cave.active and "Normal map" or "Cave view")
+    end
+end
+
+ns:RegisterOption({
+    key = "mapCaveView",
+    type = "toggle",
+    label = "Cave view: show the minimap's cave picture on the world map",
+    tooltip = "In caves (and buildings) the world map only shows the outdoor zone, but the minimap draws the inside. With this on, opening the map indoors shows the minimap there instead - big and zoomed out; mouse wheel zooms it. It shows what the minimap draws around you (no panning: the minimap is always centred on you). The Cave view / Normal map button at the bottom-left switches between the two. Your minimap goes back to its corner when you close the map.",
+    default = true,
+    onChange = function(v) if not v then CaveStop() end end,
+})
+
+-- TEMPORARY: where does a map sit in the world? /p13 mapinfo <part of a name>, then /reload;
+-- the results land in SavedVariables (P13TweaksDB.mapInfoLog) for reading outside the game.
+ns:RegisterCommand("mapinfo", "record which world a map belongs to (temporary, for terrain)", function(text)
+    local want = strtrim(text or ""):lower()
+    if want == "" then want = "zephras" end
+    local log = { "searching for: " .. want }
+    P13TweaksDB.mapInfoLog = log   -- saved as we go, so an error part-way still leaves something
+    local okY, y, x, _, instance = pcall(UnitPosition, "player")
+    table.insert(log, ("you: world %s,%s instance %s, best map %s"):format(tostring(y), tostring(x),
+        tostring(instance), tostring(C_Map.GetBestMapForUnit("player"))))
+    for id = 1, 3000 do
+        local ok, err = pcall(function()
+            local info = C_Map.GetMapInfo(id)
+            if not (info and info.name and info.name:lower():find(want, 1, true)) then return end
+            local c1, tl = C_Map.GetWorldPosFromMapPos(id, CreateVector2D(0, 0))
+            local c2, br = C_Map.GetWorldPosFromMapPos(id, CreateVector2D(1, 1))
+            local a, b, c, d
+            if tl then a, b = tl:GetXY() end
+            if br then c, d = br:GetXY() end
+            local parent = info.parentMapID and C_Map.GetMapInfo(info.parentMapID)
+            table.insert(log, ("map %d %q type %s parent %s (%s) | world %s: %s,%s to %s: %s,%s"):format(id, info.name,
+                tostring(info.mapType), tostring(info.parentMapID), parent and parent.name or "?",
+                tostring(c1), tostring(a), tostring(b), tostring(c2), tostring(c), tostring(d)))
+        end)
+        if not ok then table.insert(log, ("map %d: error %s"):format(id, tostring(err))) end
+    end
+    table.insert(log, "done")
+    for _, line in ipairs(log) do ns:Print(line) end
+end)
+
 local loader = CreateFrame("Frame")
 loader:RegisterEvent("PLAYER_LOGIN")
 loader:SetScript("OnEvent", function()
@@ -300,7 +472,70 @@ loader:SetScript("OnEvent", function()
     layer.toggleButton = button
     ns:AddMapButton(button, 10)
 
+    -- Cave view: a dark backing over the map picture (the square minimap sits on it), which
+    -- also takes the mouse wheel so it zooms the minimap instead of the hidden map.
+    caveBack = CreateFrame("Frame", nil, sc)
+    caveBack:SetAllPoints(sc)
+    caveBack:SetFrameLevel(sc:GetFrameLevel() + 60)
+    local bg = caveBack:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    bg:SetColorTexture(0.03, 0.03, 0.03, 1)
+    caveBack:EnableMouse(true)
+    caveBack:EnableMouseWheel(true)
+    caveBack:SetScript("OnMouseWheel", CaveWheel)
+    caveBack:Hide()
+
+    caveBack:SetScript("OnSizeChanged", CaveLayout)
+
+    -- invisible layer over the minimap that takes the mouse wheel (zooms the minimap)
+    caveCatch = CreateFrame("Frame", nil, caveBack)
+    caveCatch:SetAllPoints(caveBack)
+    caveCatch:EnableMouseWheel(true)
+    caveCatch:SetScript("OnMouseWheel", CaveWheel)
+
+    -- our player arrow for the borrowed minimap: points the way you face, or straight up
+    -- when your minimap is set to rotate (then the minimap turns instead)
+    caveArrow = CreateFrame("Frame", nil, caveBack)
+    caveArrow:SetSize(28, 28)
+    local at = caveArrow:CreateTexture(nil, "OVERLAY")
+    at:SetAllPoints()
+    at:SetTexture("Interface\\AddOns\\P13Tweaks\\Media\\Arrow.tga")
+    at:SetVertexColor(1, 0.85, 0.2)
+    caveArrow:SetScript("OnUpdate", function()
+        local facing = GetPlayerFacing and GetPlayerFacing()
+        local rotating = GetCVarBool and GetCVarBool("rotateMinimap")
+        if rotating or not facing or (issecretvalue and issecretvalue(facing)) then
+            at:SetRotation(0)
+        else
+            at:SetRotation(facing)   -- 0 = north (up), turning left = anticlockwise
+        end
+    end)
+    caveArrow:Hide()
+
+    caveButton = CreateFrame("Button", nil, sc, "UIPanelButtonTemplate")
+    caveButton:SetSize(100, 22)
+    caveButton:SetFrameLevel(sc:GetFrameLevel() + 100)
+    caveButton:SetScript("OnClick", function()
+        cave.userOff = cave.active   -- on -> off for this visit indoors, off -> on
+        CaveCheck()
+    end)
+    caveButton:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOPRIGHT")
+        GameTooltip:SetText(cave.active and "Back to the normal map" or "Cave view")
+        GameTooltip:AddLine("The world map has no picture of this cave or building; the minimap does. Cave view shows the minimap here, big. Mouse wheel zooms it.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    caveButton:SetScript("OnLeave", GameTooltip_Hide)
+    caveButton:Hide()
+    ns:AddMapButton(caveButton, 15)
+    WorldMapFrame:HookScript("OnHide", CaveStop)
+
     local poll = CreateFrame("Frame", nil, WorldMapFrame)
-    poll:SetScript("OnUpdate", function() Refresh(false) end)
-    poll:SetScript("OnShow", function() Refresh(true) end)
+    local sinceCave = 1
+    poll:SetScript("OnUpdate", function(_, elapsed)
+        Refresh(false)
+        sinceCave = sinceCave + elapsed
+        if sinceCave >= 0.25 then sinceCave = 0; CaveCheck() end
+    end)
+    poll:SetScript("OnShow", function() sinceCave = 1; Refresh(true) end)
 end)

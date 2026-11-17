@@ -42,6 +42,11 @@ local function Known()
     return k
 end
 
+-- For MapRoute.lua: is this flight point (by name) one this character has unlocked?
+function ns.IsFlightKnown(name)
+    return Known().names[name] == true
+end
+
 -- Continent map ID that a map belongs to (walks up the parents).
 local function ContinentOf(mapID)
     local info = mapID and C_Map.GetMapInfo(mapID)
@@ -83,11 +88,15 @@ local function LearnFromTaxiMap()
     local cont = ContinentOf(C_Map.GetBestMapForUnit("player"))
     local k = Known()
     local learned = 0
+    -- The flight map lists every flight point of the continent; only CURRENT / REACHABLE are
+    -- yours (on Forever, DISTANT = not unlocked: hidden on the map). Set each one either way,
+    -- so a wrong entry from before gets corrected.
     for i = 1, NumTaxiNodes() do
         local name, t = TaxiNodeName(i), TaxiNodeGetType(i)
-        if name and (t == "CURRENT" or t == "REACHABLE") then
-            if not k.names[name] then learned = learned + 1 end
-            k.names[name] = true
+        if name then
+            local mine = (t == "CURRENT" or t == "REACHABLE") or nil
+            if mine and not k.names[name] then learned = learned + 1 end
+            k.names[name] = mine
         end
     end
     if cont then k.continents[cont] = true end
@@ -319,6 +328,98 @@ ns:RegisterCommand("flights", "rebuild the flight point map icons and show count
     end
 end)
 
+---------------------------------------------------------------------------
+-- Not-yet-unlocked flight points on the flight master's map (classic "Flight Map" window).
+-- The flight map lists every flight point of the continent but hides the ones you don't have
+-- (type DISTANT on Forever, or NONE). TaxiNodePosition gives each one's spot: 0-1 from the
+-- TOP-left of TaxiRouteMap (checked in game: matches the game's own TaxiButton centres).
+-- Only flight points of your faction or neutral (from C_TaxiMap) are added.
+---------------------------------------------------------------------------
+
+local taxiPins, taxiUsed = {}, 0
+
+local function TaxiPin(parent)
+    taxiUsed = taxiUsed + 1
+    local f = taxiPins[taxiUsed]
+    if not f then
+        f = CreateFrame("Frame", nil, parent)
+        f:SetSize(SIZE, SIZE)
+        f.bg = f:CreateTexture(nil, "BACKGROUND")
+        f.bg:SetPoint("TOPLEFT", -2, 2)
+        f.bg:SetPoint("BOTTOMRIGHT", 2, -2)
+        f.bg:SetTexture(BACKDROP)
+        f.bg:SetVertexColor(0, 0, 0, 0.6)
+        f.tex = f:CreateTexture(nil, "ARTWORK")
+        f.tex:SetAllPoints()
+        if f.tex:SetTexture(ICON) == false then f.tex:SetTexture(ICON_FALLBACK) end
+        f.tex:SetVertexColor(unpack(COLORS.locked))
+        f.badge = f:CreateTexture(nil, "OVERLAY")
+        f.badge:SetSize(10, 10)
+        f.badge:SetPoint("CENTER", f, "BOTTOMRIGHT", -2, 2)
+        f.badge:SetTexture(BADGES.locked)
+        f:EnableMouse(true)
+        f:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(self.name, 1, 1, 1)
+            GameTooltip:AddLine("Not unlocked yet", 1, 0.3, 0.3)
+            GameTooltip:AddLine("Talk to the flight master there to unlock it, then you can fly here.", nil, nil, nil, true)
+            GameTooltip:Show()
+        end)
+        f:SetScript("OnLeave", GameTooltip_Hide)
+        taxiPins[taxiUsed] = f
+    end
+    f:SetFrameLevel(parent:GetFrameLevel() + 10)
+    return f
+end
+
+local function DrawTaxiExtras()
+    for _, f in ipairs(taxiPins) do f:Hide() end
+    taxiUsed = 0
+    if not (ns:Get("flightPoints") and ns:Get("flightPointsTaxi")) then return end
+    local mapTex = _G.TaxiRouteMap or _G.TaxiMap   -- TaxiRouteMap is the one the buttons sit on
+    local parent = _G.TaxiFrame
+    if not (mapTex and parent and parent:IsShown() and NumTaxiNodes and TaxiNodePosition) then return end
+    if not (C_TaxiMap and C_TaxiMap.GetTaxiNodesForMap) then return end
+    local cont = ContinentOf(C_Map.GetBestMapForUnit("player"))
+    if not cont then return end
+
+    -- Every flight point of yours/neutral on this continent: name -> continent position.
+    local myFaction = MyFactionNumber()
+    local all = {}
+    for _, node in ipairs(C_TaxiMap.GetTaxiNodesForMap(cont) or {}) do
+        local fac = node.faction or 0
+        if node.name and not node.name:match("^zz") and node.position and (fac == 0 or fac == myFaction) then
+            all[node.name] = node.position
+        end
+    end
+
+    local mW, mH = mapTex:GetWidth(), mapTex:GetHeight()
+    if not (mW and mW > 0 and mH and mH > 0) then return end
+
+    -- Every flight point on the continent is listed; the ones that aren't yours (DISTANT /
+    -- NONE) the game hides. Put ours where its own button would be.
+    for i = 1, NumTaxiNodes() do
+        local name, t = TaxiNodeName(i), TaxiNodeGetType(i)
+        local x, y = TaxiNodePosition(i)
+        if name and all[name] and t ~= "CURRENT" and t ~= "REACHABLE"
+            and x and y and x >= 0 and x <= 1 and y >= 0 and y <= 1 then
+            local f = TaxiPin(parent)
+            f.name = name
+            f:ClearAllPoints()
+            f:SetPoint("CENTER", mapTex, "TOPLEFT", x * mW, -y * mH)
+            f:Show()
+        end
+    end
+end
+
+ns:RegisterOption({
+    key = "flightPointsTaxi",
+    type = "toggle",
+    label = "Show not-unlocked flight points on the flight master's map",
+    tooltip = "When you talk to a flight master, the flight points you haven't unlocked yet are added to its map as red icons with a red cross (hover for the name). You can't fly to them until you've been there - they're just so you know where they are.",
+    default = true,
+})
+
 local events = CreateFrame("Frame")
 events:RegisterEvent("PLAYER_LOGIN")
 events:RegisterEvent("TAXIMAP_OPENED")
@@ -326,6 +427,11 @@ events:SetScript("OnEvent", function(_, event)
     if event == "TAXIMAP_OPENED" then
         local ok, err = pcall(LearnFromTaxiMap)
         if not ok then ns:Print("|cffff5555Flight point icons error:|r " .. tostring(err)) end
+        -- next frame, once the game has laid out its flight map
+        C_Timer.After(0, function()
+            local ok2, err2 = pcall(DrawTaxiExtras)
+            if not ok2 then ns:Print("|cffff5555Flight map icons error:|r " .. tostring(err2)) end
+        end)
     else
         C_Timer.After(4, SafeUpdate)
     end

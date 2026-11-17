@@ -20,6 +20,16 @@ local function Restore()
     if not ns:Get("mapRemember") or not s or not s.mapID or not sc then return end
     if not WorldMapFrame:IsShown() or not s.scale then return end
 
+    -- In a cave or dungeon that has its own map: leave the game's cave map alone (our saved
+    -- zoom belongs to an outdoor map and would make no sense on it).
+    local here = C_Map.GetBestMapForUnit("player")
+    local info = here and C_Map.GetMapInfo(here)
+    local zoneType = Enum and Enum.UIMapType and Enum.UIMapType.Zone or 3
+    if info and info.mapType and info.mapType > zoneType then
+        if WorldMapFrame:GetMapID() ~= here then WorldMapFrame:SetMapID(here) end
+        return
+    end
+
     -- Same zone as when closed: reopen the map you were looking at.
     -- Changed zones: keep the map Blizzard picked (your new zone), but still keep the zoom.
     if s.playerMap == C_Map.GetBestMapForUnit("player") and WorldMapFrame:GetMapID() ~= s.mapID then
@@ -38,7 +48,7 @@ ns:RegisterOption({
     key = "mapRemember",
     type = "toggle",
     label = "Remember map zoom and position",
-    tooltip = "The world map reopens on the map, zoom and pan you left it at. If you've changed zones since, it opens on your new zone at the same zoom.",
+    tooltip = "The world map reopens on the map, zoom and pan you left it at. If you've changed zones since, it opens on your new zone at the same zoom. In a cave or dungeon with its own map, it opens on that map instead.",
     default = true,
 })
 

@@ -133,6 +133,7 @@ local function BuildTrainers()
         if HasFlag(NF.BANKER) or lg:find("banker", 1, true) then keys[#keys + 1] = "BANK" end
         if HasFlag(NF.AUCTIONEER) or lg:find("auctioneer", 1, true) then keys[#keys + 1] = "AUCTION" end
         if HasFlag(NF.REPAIR) then keys[#keys + 1] = "REPAIR" end
+        if HasFlag(NF.VENDOR) then keys[#keys + 1] = "VENDOR" end   -- any vendor buys your items
         if HasFlag(NF.FLIGHT_MASTER) then keys[#keys + 1] = "FLIGHT" end   -- FlightPoints.lua fallback
         if #keys > 0 then
             local _, friendly = pcall(Get, id, "friendlyToFaction")
@@ -452,6 +453,16 @@ local function GuideToGeneralGoods()
     GuideTo({ name = "General Goods", skillLine = GOODS_KEY })
 end
 
+-- Nearest NPC who repairs gear (the anvil icon; NPC repair flag).
+local function GuideToRepair()
+    GuideTo({ name = "Repair", skillLine = "REPAIR" })
+end
+
+-- Nearest vendor (any NPC with the vendor flag): somewhere to sell your stuff.
+local function GuideToVendor()
+    GuideTo({ name = "Vendor", skillLine = "VENDOR" })
+end
+
 -- Nearest auctioneer (by NPC flag or title) = nearest auction house.
 local function GuideToAuctionHouse()
     GuideTo({ name = "Auction House", skillLine = "AUCTION" })
@@ -492,7 +503,7 @@ if Menu and Menu.ModifyMenu then
         if not ns:Get("classTrainerMenu") then return end
         root:CreateDivider()
         root:CreateButton("Mark closest Class Trainer", GuideToClassTrainer)
-        root:CreateButton("Mark closest General Goods", GuideToGeneralGoods)
+        root:CreateButton("Mark closest Vendor (to sell)", GuideToVendor)
         root:CreateButton("Mark closest Auction House", GuideToAuctionHouse)
         if HAS_WEAPON_SKILLS then
             -- Submenu: one entry per weapon; ones you already know are greyed and marked.
@@ -540,12 +551,14 @@ ns:RegisterOption({
     key = "classTrainerMenu",
     type = "toggle",
     label = "\"Mark closest Trainer\" items when right-clicking your portrait",
-    tooltip = "Adds \"Mark closest Class Trainer\", \"Mark closest General Goods\", \"Mark closest Auction House\", \"Mark closest Weapon Master\" (with a choice of weapon; only in games that still have weapon skills) and a \"Mark closest <Profession> Trainer\" for each of your professions (First Aid, Cooking and Fishing are always listed, even if you haven't learned them) to the menu you get by right-clicking your own portrait. Each puts a waypoint on the nearest matching trainer (needs QuestieDB). For a profession it looks for a trainer who teaches your next rank.",
+    tooltip = "Adds \"Mark closest Class Trainer\", \"Mark closest Vendor (to sell)\" (nearest NPC who buys your items), \"Mark closest Auction House\", \"Mark closest Weapon Master\" (with a choice of weapon; only in games that still have weapon skills) and a \"Mark closest <Profession> Trainer\" for each of your professions (First Aid, Cooking and Fishing are always listed, even if you haven't learned them) to the menu you get by right-clicking your own portrait. Each puts a waypoint on the nearest matching trainer (needs QuestieDB). For a profession it looks for a trainer who teaches your next rank.",
     default = true,
 })
 
 ns:RegisterCommand("trainer", "waypoint to the nearest trainer for your class", GuideToClassTrainer)
 ns:RegisterCommand("goods", "waypoint to the nearest General Goods vendor", GuideToGeneralGoods)
+ns:RegisterCommand("repair", "waypoint to the nearest NPC who repairs gear (anvil)", GuideToRepair)
+ns:RegisterCommand("sell", "waypoint to the nearest vendor, to sell your stuff", GuideToVendor)
 ns:RegisterCommand("ah", "waypoint to the nearest auction house (auctioneer)", GuideToAuctionHouse)
 ns:RegisterCommand("weapon","waypoint to the nearest weapon master; /p13 weapon <weapon> (e.g. daggers, 2h swords) = nearest one who teaches it", function(arg)
     arg = strtrim(arg or ""):lower():gsub("^1h ", "one-handed "):gsub("^2h ", "two-handed ")
