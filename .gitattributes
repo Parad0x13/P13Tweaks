@@ -1,2 +1,5 @@
 # Textures are binary: never touch line endings or try to diff them.
 *.tga binary
+
+# Batch files need Windows line endings.
+*.bat text eol=crlf
