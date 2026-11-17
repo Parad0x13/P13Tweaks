@@ -26,6 +26,16 @@ local function ReadNames()
     end
 end
 
+-- WoW Forever can hand addons "secret" cooldown numbers (e.g. in combat): they can be passed
+-- around but not compared or added up. issecretvalue doesn't exist on older clients.
+local IsSecret = issecretvalue or function() return false end
+
+-- "enabled" flag from the older APIs (1/0 or true/false), passed through untouched if secret.
+local function EnabledFlag(e)
+    if IsSecret(e) then return e end
+    return e ~= 0 and e ~= false
+end
+
 -- Returns start, duration, enabled for a spell (or item) name, or nil if we can't find it.
 local function GetCooldown(name)
     if C_Spell and C_Spell.GetSpellCooldown then
@@ -33,7 +43,7 @@ local function GetCooldown(name)
         if ok and info then return info.startTime, info.duration, info.isEnabled end
     elseif GetSpellCooldown then
         local ok, s, d, e = pcall(GetSpellCooldown, name)
-        if ok and s then return s, d, e ~= 0 and e ~= false end
+        if ok and (IsSecret(s) or s) then return s, d, EnabledFlag(e) end
     end
     -- Not a spell you know: try an item with that name.
     local link = GetItemInfo and select(2, GetItemInfo(name))
@@ -42,16 +52,17 @@ local function GetCooldown(name)
         local getItemCd = (C_Container and C_Container.GetItemCooldown) or _G.GetItemCooldown
         if getItemCd then
             local s, d, e = getItemCd(id)
-            if s then return s, d, e ~= 0 and e ~= false end
+            if IsSecret(s) or s then return s, d, EnabledFlag(e) end
         end
     end
     return nil
 end
 
 -- Seconds until ready (0 = ready now), "wait" = cooldown hasn't started yet (e.g. while its
--- buff is still up), or nil = spell not found.
+-- buff is still up), "secret" = the game is hiding the numbers right now, or nil = spell not found.
 local function Remaining(name)
     local s, d, enabled = GetCooldown(name)
+    if IsSecret(s) or IsSecret(d) or IsSecret(enabled) then return "secret" end
     if not s then return nil end
     if not enabled then return "wait" end
     if d <= GCD or s == 0 then return 0 end
@@ -64,6 +75,15 @@ local timerToken = {}  -- name -> number; bumped so old timers know they're stal
 local function Check(name, quiet)
     local r = Remaining(name)
     if r == nil then cooling[name] = nil; return end
+    if r == "secret" then
+        -- can't read it now: keep what we knew and look again in a second
+        timerToken[name] = (timerToken[name] or 0) + 1
+        local token = timerToken[name]
+        C_Timer.After(1, function()
+            if timerToken[name] == token then Check(name, quiet) end
+        end)
+        return
+    end
     if r == "wait" or r > 0 then
         cooling[name] = true
         if r ~= "wait" then
@@ -111,6 +131,7 @@ ns:RegisterCommand("ready", "play the spell-ready ding and show cooldowns", func
     for _, name in ipairs(tracked) do
         local r = Remaining(name)
         local state = r == nil and "|cffff4040not found - check the spelling (must be in your spellbook or bags)|r"
+            or r == "secret" and "the game is hiding this cooldown from addons right now (in combat?)"
             or r == "wait" and "cooldown starts when its effect ends"
             or r > 0 and ("ready in %d s"):format(math.ceil(r))
             or "ready"

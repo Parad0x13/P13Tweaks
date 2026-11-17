@@ -8,10 +8,10 @@
 -- opens we save, per character and continent, which flight points it offers
 -- (P13TweaksDB.knownFlights). Until you've opened one on a continent, its points show grey
 -- ("status unknown").
--- Icons are drawn with HereBeDragons-Pins from Questie, like MinimapTownsfolk.lua.
+-- Icons are drawn straight onto the world map (no Questie needed; QuestieDB is only the
+-- fallback source of positions on clients without C_TaxiMap).
 local ADDON_NAME, ns = ...
 
-local REF = "P13TweaksFlights"
 local SIZE = 16
 local ICON = "Interface\\Minimap\\Tracking\\FlightMaster"
 local ICON_FALLBACK = "Interface\\Icons\\Ability_Mount_Wyvern_01"
@@ -20,6 +20,14 @@ local COLORS = {
     locked  = { 1, 0.25, 0.25 },
     unknown = { 0.6, 0.6, 0.6 },
 }
+-- Badge in the icon's lower-right corner: tick = unlocked, cross = not yet, ? = unknown
+-- (the game's ready-check marks).
+local BADGES = {
+    known   = "Interface\\RaidFrame\\ReadyCheck-Ready",
+    locked  = "Interface\\RaidFrame\\ReadyCheck-NotReady",
+    unknown = "Interface\\RaidFrame\\ReadyCheck-Waiting",
+}
+local BACKDROP = "Interface\\CHARACTERFRAME\\TempPortraitAlphaMask"   -- round, for a dark disc
 
 local function CharKey() return (UnitName("player") or "?") .. "-" .. (GetRealmName() or "?") end
 
@@ -91,6 +99,9 @@ end
 ---------------------------------------------------------------------------
 
 local frames, used = {}, 0
+-- (declared up here, before GetPin uses it: declared further down, GetPin would see a nil
+-- global and the icons would get no parent, i.e. the wrong scale and position)
+local pinLayer, lastPlaced
 
 local function OnEnter(self)
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -111,11 +122,20 @@ local function GetPin(name, state, hint)
     used = used + 1
     local f = frames[used]
     if not f then
-        f = CreateFrame("Frame", nil, UIParent)
+        f = CreateFrame("Frame", nil, pinLayer)
         f:SetSize(SIZE, SIZE)
-        f.tex = f:CreateTexture(nil, "OVERLAY")
+        -- dark disc behind the icon so it stands out on the terrain map
+        f.bg = f:CreateTexture(nil, "BACKGROUND")
+        f.bg:SetPoint("TOPLEFT", -2, 2)
+        f.bg:SetPoint("BOTTOMRIGHT", 2, -2)
+        f.bg:SetTexture(BACKDROP)
+        f.bg:SetVertexColor(0, 0, 0, 0.6)
+        f.tex = f:CreateTexture(nil, "ARTWORK")
         f.tex:SetAllPoints()
         if f.tex:SetTexture(ICON) == false then f.tex:SetTexture(ICON_FALLBACK) end
+        f.badge = f:CreateTexture(nil, "OVERLAY")
+        f.badge:SetSize(10, 10)
+        f.badge:SetPoint("CENTER", f, "BOTTOMRIGHT", -2, 2)
         f:EnableMouse(true)
         f:SetScript("OnEnter", OnEnter)
         f:SetScript("OnLeave", GameTooltip_Hide)
@@ -124,6 +144,7 @@ local function GetPin(name, state, hint)
     f.name, f.state, f.hint = name, state, hint
     f.tex:SetVertexColor(unpack(COLORS[state]))
     f.tex:SetDesaturated(state == "unknown")
+    f.badge:SetTexture(BADGES[state])
     -- Not-unlocked ones a bit bigger so they stand out.
     local s = state == "locked" and SIZE + 4 or SIZE
     f:SetSize(s, s)
@@ -132,32 +153,102 @@ end
 
 local stats = { known = 0, locked = 0, unknown = 0, source = "none" }
 
--- Questie's HereBeDragons copy only redraws on zone change / removal: force one redraw
--- the next time the map is shown (same trick as MinimapTownsfolk.lua).
-local dirty = false
-local function Redraw()
-    local HBDPins = LibStub and LibStub("HereBeDragons-Pins-2.0", true)
-    local provider = HBDPins and HBDPins.worldmapProvider
-    if not (provider and WorldMapFrame and WorldMapFrame:IsShown()) then return end
-    dirty = false
-    provider.forceUpdate = true
-    if provider.RefreshAllData then provider:RefreshAllData() end
+---------------------------------------------------------------------------
+-- Drawing on the world map: our own layer inside the map's scroll child, scaled back so the
+-- icons stay the same size on screen at any zoom. Each icon remembers the map it was given
+-- on (f.map, f.x, f.y) and is converted through world coordinates to whatever map is open:
+-- shown on its continent and that continent's zone maps.
+---------------------------------------------------------------------------
+
+local mapContinent = {}   -- mapID -> continent (instance) ID, or false
+
+local function MapContinent(mapID)
+    if mapContinent[mapID] == nil then
+        local info = C_Map.GetMapInfo(mapID)
+        local cont = false
+        if info and Enum and Enum.UIMapType and info.mapType >= Enum.UIMapType.Continent
+            and C_Map.GetWorldPosFromMapPos and CreateVector2D then
+            cont = C_Map.GetWorldPosFromMapPos(mapID, CreateVector2D(0.5, 0.5)) or false
+        end
+        mapContinent[mapID] = cont
+    end
+    return mapContinent[mapID]
 end
-if WorldMapFrame then
-    WorldMapFrame:HookScript("OnShow", function() if dirty then Redraw() end end)
+
+-- Where icon f sits on map `mapID` (0-1), or nil if not on it.
+local function PosOn(f, mapID)
+    if f.map == mapID then return f.x, f.y end
+    f.posCache = f.posCache or {}
+    local c = f.posCache[mapID]
+    if c == nil then
+        c = false
+        local here = MapContinent(mapID)
+        if here and C_Map.GetMapPosFromWorldPos then
+            local cont, world = C_Map.GetWorldPosFromMapPos(f.map, CreateVector2D(f.x, f.y))
+            if cont == here and world then
+                local _, pos = C_Map.GetMapPosFromWorldPos(cont, world, mapID)
+                local x, y
+                if pos then x, y = pos:GetXY() end   -- (not "pos and pos:GetXY()": that keeps only x)
+                if x and y and x >= 0 and x <= 1 and y >= 0 and y <= 1 then c = { x, y } end
+            end
+        end
+        f.posCache[mapID] = c
+    end
+    if c then return c[1], c[2] end
+end
+
+local function Place(force)
+    local sc = WorldMapFrame and WorldMapFrame.ScrollContainer
+    local child = sc and sc.Child
+    if not (pinLayer and child and WorldMapFrame:IsShown()) then return end
+    local mapID = WorldMapFrame:GetMapID()
+    local scale, W, H = sc:GetCanvasScale(), child:GetWidth(), child:GetHeight()
+    if not (mapID and scale and scale > 0 and scale < math.huge and W and W > 0 and H and H > 0) then return end
+    local sig = ("%d:%.5f:%.1f:%.1f"):format(mapID, scale, W, H)
+    if sig == lastPlaced and not force then return end
+    lastPlaced = sig
+
+    pinLayer:SetScale(1 / scale)
+    pinLayer:SetSize(W * scale, H * scale)
+    for i = 1, used do
+        local f = frames[i]
+        local x, y = PosOn(f, mapID)
+        f:ClearAllPoints()
+        if x then
+            f:SetPoint("CENTER", pinLayer, "TOPLEFT", x * W * scale, -y * H * scale)
+            f:Show()
+        else
+            f:Hide()
+        end
+    end
+end
+
+local function EnsureLayer()
+    if pinLayer then return pinLayer end
+    local sc = WorldMapFrame and WorldMapFrame.ScrollContainer
+    if not (sc and sc.Child and sc.GetCanvasScale) then return end
+    pinLayer = CreateFrame("Frame", nil, sc.Child)
+    pinLayer:SetPoint("TOPLEFT", sc.Child, "TOPLEFT")
+    pinLayer:SetFrameLevel(sc.Child:GetFrameLevel() + 20)   -- above the terrain
+    local poll = CreateFrame("Frame", nil, WorldMapFrame)
+    poll:SetScript("OnUpdate", function() Place(false) end)
+    return pinLayer
+end
+
+-- Put icon f on map `mapID` at x, y (0-1).
+local function AddIcon(f, mapID, x, y)
+    f.map, f.x, f.y = mapID, x, y
+    if f.posCache then wipe(f.posCache) end
 end
 
 Update = function()
-    local HBDPins = LibStub and LibStub("HereBeDragons-Pins-2.0", true)
-    if not HBDPins then return false, "Questie's map library (HereBeDragons) isn't loaded." end
-    HBDPins:RemoveAllWorldMapIcons(REF)
+    if not EnsureLayer() then return false, "The world map isn't ready yet." end
     for _, f in ipairs(frames) do f:Hide() end
     used = 0
+    lastPlaced = nil
     stats.known, stats.locked, stats.unknown, stats.source = 0, 0, 0, "none"
-    if not ns:Get("flightPoints") then Redraw(); return true end
+    if not ns:Get("flightPoints") then return true end
 
-    -- Shown on the continent map and on its zone maps.
-    local showFlag = HBD_PINS_WORLDMAP_SHOW_CONTINENT or 2
     local k = Known()
     local myFaction = MyFactionNumber()
 
@@ -166,12 +257,13 @@ Update = function()
         for _, cont in ipairs(Continents()) do
             for _, node in ipairs(C_TaxiMap.GetTaxiNodesForMap(cont) or {}) do
                 local fac = node.faction or 0
-                if node.name and node.position and (fac == 0 or fac == myFaction) then
+                -- ("zzOLD..." = retired flight points still in the game data, e.g. on top of Ratchet)
+                if node.name and not node.name:match("^zz") and node.position
+                    and (fac == 0 or fac == myFaction) then
                     local state = k.names[node.name] and "known"
                         or (k.continents[cont] and "locked" or "unknown")
                     stats[state] = stats[state] + 1
-                    HBDPins:AddWorldMapIconMap(REF, GetPin(node.name, state), cont,
-                        node.position.x, node.position.y, showFlag)
+                    AddIcon(GetPin(node.name, state), cont, node.position.x, node.position.y)
                 end
             end
         end
@@ -188,10 +280,9 @@ Update = function()
                     for _, pt in ipairs(points) do
                         if pt[1] and pt[2] and pt[1] >= 0 and pt[2] >= 0 then
                             stats.unknown = stats.unknown + 1
-                            HBDPins:AddWorldMapIconMap(REF,
-                                GetPin(npc.name .. (npc.sub and (" <" .. npc.sub .. ">") or ""), "unknown",
+                            AddIcon(GetPin(npc.name .. (npc.sub and (" <" .. npc.sub .. ">") or ""), "unknown",
                                     "This game version doesn't list flight points, so unlock status can't be shown."),
-                                uiMap, pt[1] / 100, pt[2] / 100, showFlag)
+                                uiMap, pt[1] / 100, pt[2] / 100)
                         end
                     end
                 end
@@ -199,8 +290,7 @@ Update = function()
         end
     end
 
-    dirty = true
-    Redraw()
+    Place(true)
     return true
 end
 
@@ -215,7 +305,7 @@ ns:RegisterOption({
     key = "flightPoints",
     type = "toggle",
     label = "Show every flight point on the world map",
-    tooltip = "Puts a flight point icon on the world map (continent and zone maps) for every flight point of your faction or neutral.\n\nWhite = unlocked, red (bigger) = not unlocked yet, grey = not known yet: the game only says which you have while a flight master's map is open, so open one once on each continent (per character) and it's remembered.\n\nNeeds Questie (for its map library).",
+    tooltip = "Puts a flight point icon on the world map (continent and zone maps) for every flight point of your faction or neutral.\n\nGreen tick = unlocked, red cross (red, bigger icon) = not unlocked yet, ? (grey icon) = not known yet: the game only says which you have while a flight master's map is open, so open one once on each continent (per character) and it's remembered.",
     default = true,
     onChange = function() SafeUpdate() end,
 })

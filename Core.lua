@@ -47,6 +47,7 @@ events:SetScript("OnEvent", function(self, event, arg1)
         P13TweaksDB.targetMarker, P13TweaksDB.targetMarkerIcon = nil, nil  -- removed target arrow
         P13TweaksDB.priorityTarget, P13TweaksDB.priorityTargetQuestInfo = nil, nil  -- removed quest target key
         P13TweaksDB.priorityTargetNames, P13TweaksDB.priorityTargetQuests = nil, nil
+        P13TweaksDB.tileTestLog, P13TweaksDB.flightDebugLog = nil, nil  -- removed test/debug logs
         for _, def in ipairs(ns.options) do
             if P13TweaksDB[def.key] == nil then
                 P13TweaksDB[def.key] = def.default
@@ -62,6 +63,34 @@ events:SetScript("OnEvent", function(self, event, arg1)
         self:UnregisterEvent("ADDON_LOADED")
     end
 end)
+
+-- Small buttons in a row along the bottom-left of the world map picture. Features add theirs
+-- with ns:AddMapButton(button, order); shown ones are laid out left to right by `order`.
+ns.mapButtons = {}
+
+function ns.LayoutMapButtons()
+    local sc = WorldMapFrame and WorldMapFrame.ScrollContainer
+    if not sc then return end
+    local x = 6
+    for _, b in ipairs(ns.mapButtons) do
+        b:ClearAllPoints()
+        if b:IsShown() then
+            b:SetPoint("BOTTOMLEFT", sc, "BOTTOMLEFT", x, 6)
+            x = x + b:GetWidth() + 4
+        end
+    end
+end
+
+function ns:AddMapButton(button, order)
+    button.p13Order = order or 0
+    table.insert(self.mapButtons, button)
+    table.sort(self.mapButtons, function(a, b) return a.p13Order < b.p13Order end)
+    -- re-lay the row whenever a button is shown or hidden
+    hooksecurefunc(button, "Show", ns.LayoutMapButtons)
+    hooksecurefunc(button, "Hide", ns.LayoutMapButtons)
+    hooksecurefunc(button, "SetShown", ns.LayoutMapButtons)
+    ns.LayoutMapButtons()
+end
 
 -- Extra "/p13 <word>" commands that features can add. Plain /p13 opens the options.
 ns.commands = {}

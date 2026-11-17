@@ -312,7 +312,9 @@ ns:RegisterOption({
     default = true,
     onChange = function()
         local sc = WorldMapFrame and WorldMapFrame.ScrollContainer
-        if sc and sc.CreateZoomLevels and WorldMapFrame:GetMapID() then sc:CreateZoomLevels() end
+        -- sc.mapID, not WorldMapFrame's: a fresh character's scroll area may have no map yet
+        -- (the new zoom then applies when the map next loads)
+        if sc and sc.CreateZoomLevels and sc.mapID then sc:CreateZoomLevels() end
     end,
 })
 
@@ -325,7 +327,9 @@ ns:RegisterOption({
     maxLetters = 3,
     onChange = function()
         local sc = WorldMapFrame and WorldMapFrame.ScrollContainer
-        if sc and sc.CreateZoomLevels and WorldMapFrame:GetMapID() then sc:CreateZoomLevels() end
+        -- sc.mapID, not WorldMapFrame's: a fresh character's scroll area may have no map yet
+        -- (the new zoom then applies when the map next loads)
+        if sc and sc.CreateZoomLevels and sc.mapID then sc:CreateZoomLevels() end
     end,
 })
 
@@ -338,7 +342,9 @@ ns:RegisterOption({
     maxLetters = 4,
     onChange = function()
         local sc = WorldMapFrame and WorldMapFrame.ScrollContainer
-        if sc and sc.CreateZoomLevels and WorldMapFrame:GetMapID() then sc:CreateZoomLevels() end
+        -- sc.mapID, not WorldMapFrame's: a fresh character's scroll area may have no map yet
+        -- (the new zoom then applies when the map next loads)
+        if sc and sc.CreateZoomLevels and sc.mapID then sc:CreateZoomLevels() end
     end,
 })
 

@@ -9,6 +9,8 @@
 Core.lua
 Features\MapCircle.lua
 Features\MapSeamless.lua
+Features\MapTerrainData.lua
+Features\MapTerrain.lua
 Features\MapMemory.lua
 Features\MapMiddleClick.lua
 Features\MapCenterKey.lua

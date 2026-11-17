@@ -1,4 +1,5 @@
--- P13Tweaks feature: middle-click (wheel click) the world map to centre it on yourself, same as F.
+-- P13Tweaks feature: middle-click (wheel click) the world map to centre and zoom in on yourself,
+-- same as the map's Center button.
 local ADDON_NAME, ns = ...
 
 local pressedOnMap = false
@@ -11,14 +12,15 @@ local function OnMouseUp(sc, button)
     if button ~= "MiddleButton" then return end
     local wasPressed = pressedOnMap
     pressedOnMap = false
-    if wasPressed and ns:Get("mapMiddleClick") and ns.CentreMapOnPlayer then ns.CentreMapOnPlayer() end
+    -- same as the map's Center button: centre on you and zoom in close
+    if wasPressed and ns:Get("mapMiddleClick") and ns.CentreMapOnPlayer then ns.CentreMapOnPlayer(true) end
 end
 
 ns:RegisterOption({
     key = "mapMiddleClick",
     type = "toggle",
     label = "Middle-click the map to centre on me",
-    tooltip = "Click the mouse wheel button on the world map to switch to your zone and centre on your position, the same as pressing F. Works in combat too.",
+    tooltip = "Click the mouse wheel button on the world map to switch to your zone, centre on your position and zoom in close, the same as the map's Center button. Works in combat too.",
     default = true,
 })
 
