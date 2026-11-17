@@ -15,6 +15,14 @@ Personal quality-of-life addon for **WoW Forever** (`P13Tweaks.toc`, interface 1
   tested in game** except where the user reported results.
 - Adding/removing a file in a `.toc` needs a **full game restart**; other changes need only `/reload`.
 
+## 2026-11-16 (from a Trad0x session) – code committed in 885c94e
+- `Features/FishKey.lua`: "Louder splash while fishing" now also sets `Sound_DialogVolume` 0 and
+  turns off `Sound_EnableEmoteSounds`, `Sound_EnablePetSounds` and `Sound_EnableErrorSpeech` while
+  the line is out. They're restored the same way as the others; a CVar the client lacks is skipped.
+  The tooltip is updated. It passed a syntax check but hasn't been tested in game.
+- Spells, footsteps and combat noise share the SFX channel with the splash, so they can't be muted
+  by CVar. Offered: `MuteSoundFile` for specific sounds the user names.
+
 ## How it's built
 - `Core.lua`: `ns:RegisterOption(def)`, `ns:Get/Set` (Set calls `onChange` for `key`, `numberKey` or
   `inputKey`), defaults filled on `ADDON_LOADED`, removed-option cleanup, `ns:RegisterCommand(word, help, fn)`.
