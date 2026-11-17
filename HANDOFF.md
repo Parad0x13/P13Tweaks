@@ -211,3 +211,19 @@ quest enemy arrow, free keys, Zephras terrain, flight master map icons). Commit/
   .tocs - bump all three every update. Reason: `/reload` re-reads Lua but NOT the .toc, so a pull + `/reload` now shows the
   new version. Only adding a new file to the .toc (or changing Interface/SavedVariables) still needs a full game restart.
   Partner setup = clone on her Desktop + `link.ps1` once; afterwards `git pull` + `/reload`.
+- **v0.4.0**: third quest-window view "side by side" (View button cycles by quest -> side by side -> by player; `questShareView`
+  = quest/compare/player). One column per player (you first, version under each name), one row per quest, cell = count
+  ("3/10", single objective) or percent, ready/done/failed/"-" (not started); furthest along = green, behind = amber; a
+  "gap" column = max-min progress in %, rows where players differ sort first; "Show: diffs/all" button (`questShareDiffOnly`).
+  The window widens to fit (`W` is now variable, `CMP_*` constants). Rows carry `.cells/.titleW/.nowrap`. Untested in game.
+- **v0.4.1**: `/p13 questsdemo` now adds TWO pretend teammates (Demo Ann, Demo Bob) built from your own quest log with
+  built-in differences (behind / quarter way / ready / not started / already done / two fake quests only they have / Bob on
+  version 0.3.9), so the side-by-side view, gap column and version tags can be tried alone. Run it again to remove them.
+- **v0.5.0 QuestWhere** (new file `Features/QuestWhere.lua`, in both .tocs - NEEDS A FULL GAME RESTART once): click a quest you
+  don't have in the teammates' quests window (any of the 3 views) -> panel "How do I get this quest?": blockers (level, race/class
+  bitmasks via `bit`, `exclusiveTo`, `parentQuest`, `requiredMinRep`), tree of `preQuestGroup` (all) / `preQuestSingle` (any one)
+  with done / in your log / not done (depth <= 6), the next quest to start (`NextStep`), its givers from `startedBy`
+  ({creatures},{objects},{items}) with nearest spawn (spawns {area={{x,y}}} + `ns.LoadAreaMap`), and a waypoint button.
+  QuestieDB field names are in `QuestieDB/src/meta/questMeta.lua` (`[2]='startedBy'`, `[12]='preQuestGroup'`, ...). Exports from
+  QuestShare: `ns.QuestCompleted`, `ns.HasQuest`; window rows carry `.guide = questId`. Option `questHow`; command `/p13 questhow <id>`.
+  Untested in game; the pretend teammates' fake quests (9990001/2) have no QuestieDB record by design.

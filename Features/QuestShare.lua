@@ -23,10 +23,11 @@ local PREFIX = "P13Q"
 local PROTOCOL = 1             -- bump when the message format changes
 local MAX_MSG = 250            -- the game allows 255 bytes per addon message
 local BURST, REFILL = 8, 1.1   -- send up to 8 at once, then one every 1.1 s (under the game's limit)
-local DEMO = "Demo (you)"      -- fake teammate made by /p13 questsdemo
+
 
 local members = {}    -- name -> { quests = { [id] = { title, state, objs = { {text, done} } } }, protocol, demo }
 local myQuests = {}   -- my own quest log, same shape (plus .header)
+ns.HasQuest = function(id) return myQuests[id] ~= nil end   -- used by QuestWhere.lua
 local lastSent = {}   -- id -> the message we last sent for that quest
 local warned = {}     -- name -> true once we've said their P13Tweaks is a different version
 local seen = {}       -- id -> title: every quest anyone in the group has had in their log
@@ -44,6 +45,7 @@ local function Completed(id)
     if IsQuestFlaggedCompleted then return IsQuestFlaggedCompleted(id) and true or false end
     return false
 end
+ns.QuestCompleted = Completed   -- used by QuestWhere.lua
 
 -- Runs fn after delay seconds; asking again while it's waiting does nothing (so bursts become one call).
 local pending = {}
@@ -361,7 +363,27 @@ local function VerTag(v)
     return (v == ns.version and " |cff808080v" or " |cffff6040v") .. v .. "|r"
 end
 
-local function ViewMode() return ns:Get("questShareView") == "player" and "player" or "quest" end
+-- "quest" (by quest), "compare" (side by side), "player" (by player)
+local function ViewMode()
+    local v = ns:Get("questShareView")
+    return (v == "player" or v == "compare") and v or "quest"
+end
+local NEXT_VIEW = { quest = "compare", compare = "player", player = "quest" }
+local VIEW_LABEL = { quest = "View: by quest", compare = "View: side by side", player = "View: by player" }
+
+-- Side-by-side layout (pixels)
+local CMP_TITLE, CMP_COL, CMP_GAP = 150, 78, 56
+local cells = {}   -- pooled FontStrings for the side-by-side columns
+
+local function Cell(i)
+    if cells[i] then return cells[i] end
+    local fs = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    fs:SetJustifyH("CENTER")
+    fs:SetJustifyV("TOP")
+    fs:SetWordWrap(false)
+    cells[i] = fs
+    return fs
+end
 
 -- Shares one of my quests with the group (the game's own quest sharing: they get an accept prompt).
 local function PushQuest(id)
@@ -452,13 +474,17 @@ local function QuestButton(i)
     b:SetHighlightTexture("Interface\\Buttons\\WHITE8X8")
     b:GetHighlightTexture():SetVertexColor(1, 1, 1, 0.12)
     b:SetScript("OnClick", function(self)
+        if self.guide then   -- a quest I don't have: how do I get it?
+            ns.ShowQuestGuide(self.guide, self.guideTitle)
+            return
+        end
         local ok, why = PushQuest(self.questId)
         if ok then ns:Print("Shared \"" .. (myQuests[self.questId] and myQuests[self.questId].title or "quest") .. "\" with your group.")
         else ns:Print("Couldn't share it: " .. why .. ".") end
     end)
     b:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText("Click to share this quest with your group", 1, 1, 1)
+        GameTooltip:SetText(self.guide and "Click to see how to get this quest" or "Click to share this quest with your group", 1, 1, 1)
         GameTooltip:Show()
     end)
     b:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -494,16 +520,16 @@ local function BuildWindow()
     title:SetText("Teammates' quests")
 
     local viewBtn = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
-    viewBtn:SetSize(100, 20)
+    viewBtn:SetSize(112, 20)
     viewBtn:SetPoint("TOPLEFT", 12, -32)
     viewBtn:SetScript("OnClick", function()
-        ns:Set("questShareView", ViewMode() == "quest" and "player" or "quest")
+        ns:Set("questShareView", NEXT_VIEW[ViewMode()])
         RefreshWindow()
     end)
     win.viewBtn = viewBtn
 
     local shareBtn = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
-    shareBtn:SetSize(80, 20)
+    shareBtn:SetSize(70, 20)
     shareBtn:SetPoint("LEFT", viewBtn, "RIGHT", 4, 0)
     shareBtn:SetText("Share all")
     shareBtn:SetScript("OnClick", ShareAll)
@@ -513,6 +539,22 @@ local function BuildWindow()
         GameTooltip:Show()
     end)
     shareBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+    -- side-by-side view only: show every quest, or only the ones where players differ
+    local diffBtn = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
+    diffBtn:SetSize(76, 20)
+    diffBtn:SetPoint("LEFT", shareBtn, "RIGHT", 4, 0)
+    diffBtn:SetScript("OnClick", function()
+        ns:Set("questShareDiffOnly", not ns:Get("questShareDiffOnly"))
+        RefreshWindow()
+    end)
+    diffBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+        GameTooltip:SetText("Show only the quests where players are at different points", 1, 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    diffBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    win.diffBtn = diffBtn
 
     local ask = CreateFrame("Button", nil, win, "UIPanelButtonTemplate")
     ask:SetSize(90, 20)
@@ -589,14 +631,15 @@ local function BuildByQuest(out)
     local missing = {}
     for name in pairs(GroupNames()) do if not members[name] then table.insert(missing, name) end end
     table.sort(missing)
-    table.insert(out, { "|cff808080Click one of your quests to share it with the group.|r", 0, 2 })
+    table.insert(out, { "|cff808080Click one of your quests to share it; click one you don't have to see how to get it.|r", 0, 2 })
     if #missing > 0 then
         table.insert(out, { "|cff808080No P13Tweaks (can't be shown): " .. table.concat(missing, ", ") .. "|r", 0, 2 })
     end
     if #ids == 0 then table.insert(out, { "|cff808080(nobody has any quests)|r", 0, 8 }) end
 
     for _, id in ipairs(ids) do
-        table.insert(out, { "|cffffd200" .. title[id] .. "|r", 0, 10, myQuests[id] and id or nil })
+        table.insert(out, { "|cffffd200" .. title[id] .. "|r", 0, 10, myQuests[id] and id or nil,
+            guide = (not myQuests[id]) and id or nil })
         for _, p in ipairs(players) do
             if p.name ~= "You" then   -- you're already in your own quest log; only show teammates
                 local q = p.quests[id]
@@ -624,7 +667,7 @@ local function BuildByPlayer(out)
             if q.state == 1 then t = t .. " |cff40ff40(ready to turn in)|r"
             elseif q.state == -1 then t = t .. " |cffff4040(failed)|r" end
             if myQuests[e.id] and not m.demo then t = t .. " |cff8fa8ff(you have it too)|r" end
-            table.insert(out, { t, 12, 4 })
+            table.insert(out, { t, 12, 4, guide = (not myQuests[e.id]) and e.id or nil })
             if q.state ~= 1 then
                 for _, o in ipairs(q.objs) do
                     table.insert(out, { (o[2] and "|cff808080" or "|cffffffff") .. o[1] .. "|r", 26, 1 })
@@ -634,13 +677,147 @@ local function BuildByPlayer(out)
     end
 end
 
+-- One player's place on one quest for the side-by-side view.
+-- Returns text, progress (0..1, nil = hasn't started), kind ("ok", "ready", "failed", "done", "none").
+local function CompareCell(q, done)
+    if q then
+        if q.state == 1 then return "ready", 1, "ready" end
+        if q.state == -1 then return "failed", 0, "failed" end
+        local have, need, count = 0, 0, nil
+        for _, o in ipairs(q.objs) do
+            local a, b = o[1]:match("(%d+)%s*/%s*(%d+)")
+            if a then
+                have = have + tonumber(a); need = need + tonumber(b); count = a .. "/" .. b
+            else
+                need = need + 1
+                if o[2] then have = have + 1 end
+            end
+        end
+        if need == 0 then return "...", 0, "ok" end
+        local frac = math.min(1, have / need)
+        local text = (#q.objs == 1 and count) or (math.floor(frac * 100 + 0.5) .. "%")
+        return text, frac, "ok"
+    end
+    if done then return "done", 1, "done" end
+    return "-", nil, "none"
+end
+
+local KIND_COLOR = { ready = "|cff40ff40", failed = "|cffff4040", done = "|cff40c0ff", none = "|cff808080" }
+
+-- Side by side: one column per player (you first), one row per quest, plus a gap column.
+-- Whoever is furthest along on a quest is green, anyone behind is amber.
+local function BuildCompare(out)
+    local players = {}
+    local _, myClass = UnitClass("player")
+    local mc = myClass and RAID_CLASS_COLORS and RAID_CLASS_COLORS[myClass]
+    table.insert(players, { name = "You", color = mc and mc.colorStr and ("|c" .. mc.colorStr) or "|cff33ff99",
+        quests = myQuests, isDone = Completed, version = ns.version })
+    local names = {}
+    for name in pairs(members) do table.insert(names, name) end
+    table.sort(names)
+    if #names == 0 then return end
+    for _, name in ipairs(names) do
+        local m = members[name]
+        table.insert(players, { name = name, color = NameColor(name), quests = m.quests, version = m.version,
+            isDone = function(id) return m.done and m.done[id] end })
+    end
+    local n = #players
+    local gapX = CMP_TITLE + n * CMP_COL
+
+    -- every quest anyone has
+    local title, ids = {}, {}
+    for _, p in ipairs(players) do
+        for id, q in pairs(p.quests) do
+            if not title[id] then title[id] = q.title or seen[id] or "?"; table.insert(ids, id) end
+        end
+    end
+
+    -- compute each row
+    local rows = {}
+    for _, id in ipairs(ids) do
+        local texts, scores, kinds = {}, {}, {}
+        local best, worst, differs = -1, 2, false
+        for i, p in ipairs(players) do
+            local t, s, k = CompareCell(p.quests[id], p.isDone(id))
+            texts[i], scores[i], kinds[i] = t, s, k
+            local v = s or 0
+            if v > best then best = v end
+            if v < worst then worst = v end
+            if t ~= texts[1] then differs = true end
+        end
+        table.insert(rows, { id = id, texts = texts, scores = scores, kinds = kinds, best = best,
+            gap = math.floor((best - worst) * 100 + 0.5), differs = differs })
+    end
+    local diffOnly = ns:Get("questShareDiffOnly")
+    table.sort(rows, function(a, b)
+        if a.differs ~= b.differs then return a.differs end
+        return title[a.id] < title[b.id]
+    end)
+
+    -- header
+    local head = { "|cff808080Quest|r", 0, 0, nil, cells = {}, titleW = CMP_TITLE, nowrap = true }
+    for i, p in ipairs(players) do
+        table.insert(head.cells, { x = CMP_TITLE + (i - 1) * CMP_COL, w = CMP_COL,
+            text = p.color .. p.name .. "|r\n" .. VerTag(p.version):gsub("^ ", "") })
+    end
+    table.insert(head.cells, { x = gapX, w = CMP_GAP, text = "|cff808080gap|r" })
+    table.insert(out, head)
+
+    local shown = 0
+    for _, r in ipairs(rows) do
+        if r.differs or not diffOnly then
+            shown = shown + 1
+            local e = { (r.differs and "|cffffd200" or "|cffa0a070") .. title[r.id] .. "|r", 0, 5,
+                myQuests[r.id] and r.id or nil, cells = {}, titleW = CMP_TITLE, nowrap = true,
+                guide = (not myQuests[r.id]) and r.id or nil }
+            for i = 1, n do
+                local kind, color = r.kinds[i], nil
+                if kind == "ok" then
+                    color = (r.scores[i] or 0) >= r.best - 0.001 and "|cff40ff40" or "|cffffa040"
+                else
+                    color = KIND_COLOR[kind]
+                end
+                table.insert(e.cells, { x = CMP_TITLE + (i - 1) * CMP_COL, w = CMP_COL, text = color .. r.texts[i] .. "|r" })
+            end
+            local gapText = not r.differs and "|cff808080same|r"
+                or (r.gap > 0 and ("|cffffa040" .. r.gap .. "%|r")) or "|cffffa040~|r"
+            table.insert(e.cells, { x = gapX, w = CMP_GAP, text = gapText })
+            table.insert(out, e)
+        end
+    end
+    if shown == 0 then
+        table.insert(out, { "|cff808080(everyone is in the same place on every quest)|r", 0, 8 })
+    end
+    table.insert(out, { "|cff808080green = furthest along, amber = behind, - = not started. Click one of your quests to share it, or one you don't have to see how to get it.|r", 0, 10 })
+end
+
 RefreshWindow = function()
     if not (win and win:IsShown()) then return end
-    win.viewBtn:SetText(ViewMode() == "quest" and "View: by quest" or "View: by player")
+    local mode = ViewMode()
+    win.viewBtn:SetText(VIEW_LABEL[mode])
+    win.diffBtn:SetShown(mode == "compare")
+    win.diffBtn:SetText(ns:Get("questShareDiffOnly") and "Show: diffs" or "Show: all")
 
-    -- Lines are { text, indent, gapBefore, questId (when clicking it shares that quest) }.
+    -- The side-by-side view is as wide as it needs to be; the others use the normal width.
+    local wantW = 340
+    if mode == "compare" then
+        local count = 1
+        for _ in pairs(members) do count = count + 1 end
+        wantW = math.min(900, math.max(340, CMP_TITLE + count * CMP_COL + CMP_GAP))
+    end
+    if wantW ~= W then
+        W = wantW
+        win:SetWidth(W + 50)
+        content:SetWidth(W)
+        emptyText:SetWidth(W - 8)
+    end
+
+    -- Lines are { text, indent, gapBefore, questId (when clicking it shares that quest) };
+    -- side-by-side rows also carry .cells (the columns), .titleW and .nowrap.
     local out = {}
-    if ViewMode() == "quest" then BuildByQuest(out) else BuildByPlayer(out) end
+    if mode == "quest" then BuildByQuest(out)
+    elseif mode == "compare" then BuildCompare(out)
+    else BuildByPlayer(out) end
 
     -- Result of the last "Ask again" goes on top.
     local checkText
@@ -656,29 +833,44 @@ RefreshWindow = function()
     end
 
     local y = 0
-    local nb = 0
+    local nb, nc = 0, 0
     for i, e in ipairs(out) do
         local fs = Line(i)
         y = y + e[3]
         fs:ClearAllPoints()
         fs:SetPoint("TOPLEFT", e[2], -y)
-        fs:SetWidth(W - e[2])
+        fs:SetWidth(e.titleW or (W - e[2]))
+        fs:SetWordWrap(not e.nowrap)
         fs:SetText(e[1])
         fs:Show()
         local h = fs:GetStringHeight()
-        if e[4] then
+        for _, c in ipairs(e.cells or {}) do
+            nc = nc + 1
+            local cf = Cell(nc)
+            cf:ClearAllPoints()
+            cf:SetPoint("TOPLEFT", c.x, -y)
+            cf:SetWidth(c.w)
+            cf:SetText(c.text)
+            cf:Show()
+            h = math.max(h, cf:GetStringHeight())
+        end
+        local guide = e.guide and ns.ShowQuestGuide and ns:Get("questHow") and e.guide or nil
+        if e[4] or guide then
             nb = nb + 1
             local b = QuestButton(nb)
             b.questId = e[4]
+            b.guide = guide
+            b.guideTitle = guide and (e[1]:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r.*$", "")) or nil
             b:ClearAllPoints()
             b:SetPoint("TOPLEFT", e[2], -y)
-            b:SetSize(W - e[2], h)
+            b:SetSize(e.titleW or (W - e[2]), h)
             b:Show()
         end
         y = y + h
     end
     for i = #out + 1, #lines do lines[i]:Hide() end
     for i = nb + 1, #btns do btns[i]:Hide() end
+    for i = nc + 1, #cells do cells[i]:Hide() end
 
     if #out == 0 then
         local why = not Sharing() and "Quest sharing is off. Turn it on in /p13."
@@ -804,20 +996,57 @@ ns:RegisterCommand("version", "show your P13Tweaks version and your teammates'",
     end
 end)
 
-ns:RegisterCommand("questsdemo", "add (or remove) a pretend teammate with your own quests, to try the window and tooltips alone", function()
-    if members[DEMO] then
-        members[DEMO] = nil
-        ns:Print("Pretend teammate removed.")
+-- Pretend teammates for testing alone. They start from a copy of your quest log, then differ from it
+-- in set ways so every case in the window shows up: behind, ahead, ready to turn in, not started,
+-- already done, a quest only they have, and a different P13Tweaks version.
+local DEMO_PEOPLE = { "Demo Ann", "Demo Bob" }
+
+local function MakeDemo(which)
+    local ids = {}
+    for id in pairs(myQuests) do table.insert(ids, id) end
+    table.sort(ids)
+    local quests, done = {}, {}
+    for k, id in ipairs(ids) do
+        local q = myQuests[id]
+        local objs = {}
+        for _, o in ipairs(q.objs) do table.insert(objs, { o[1], o[2] }) end
+        local copy = { title = q.title, state = q.state, objs = objs }
+        local pattern = (k + which) % 4
+        if which == 1 then
+            if pattern == 0 then copy = nil; done[id] = true            -- not in the log: finished it already
+            elseif pattern == 1 then                                    -- behind: half the counts
+                for _, o in ipairs(copy.objs) do
+                    o[1] = o[1]:gsub("(%d+)%s*/%s*(%d+)", function(a, b) return math.floor(a / 2) .. "/" .. b end)
+                    o[2] = false
+                end
+                copy.state = 0
+            elseif pattern == 3 then copy.state = 1 end                 -- ready to turn in
+        else
+            if pattern == 2 then copy = nil                             -- hasn't started it
+            elseif pattern == 0 then                                    -- a quarter of the way
+                for _, o in ipairs(copy.objs) do
+                    o[1] = o[1]:gsub("(%d+)%s*/%s*(%d+)", function(a, b) return math.floor(a / 4) .. "/" .. b end)
+                    o[2] = false
+                end
+                copy.state = 0
+            end
+        end
+        if copy then quests[id] = copy end
+    end
+    -- quests that only the pretend teammates have (so this works with an empty quest log too)
+    quests[9990001] = { title = "Demo: Boars In The Hills", state = 0, objs = { { "Boars slain: " .. (which == 1 and "2" or "7") .. "/10", false } } }
+    quests[9990002] = { title = "Demo: Lost Supplies", state = 0, objs = { { "Crates found: " .. (which == 1 and "3" or "0") .. "/3", which == 1 }, { "Scout spoken to: 0/1", false } } }
+    return { quests = quests, done = done, demo = true, version = which == 1 and ns.version or "0.3.9" }
+end
+
+ns:RegisterCommand("questsdemo", "add (or remove) two pretend teammates to try the quest window alone", function()
+    if members[DEMO_PEOPLE[1]] then
+        for _, name in ipairs(DEMO_PEOPLE) do members[name] = nil end
+        ns:Print("Pretend teammates removed.")
     else
         UpdateMine()
-        local copy = {}
-        for id, q in pairs(myQuests) do
-            local objs = {}
-            for _, o in ipairs(q.objs) do table.insert(objs, { o[1], o[2] }) end
-            copy[id] = { title = q.title, state = q.state, objs = objs }
-        end
-        members[DEMO] = { quests = copy, demo = true }
-        ns:Print("Added a pretend teammate with your own quests. Hover a quest mob or item, or type /p13 quests. Type /p13 questsdemo again to remove it.")
+        for i, name in ipairs(DEMO_PEOPLE) do members[name] = MakeDemo(i) end
+        ns:Print("Added pretend teammates Demo Ann and Demo Bob (they differ from your quests so every case shows; Bob has an older version). Hover a quest mob or item, or switch views in the window. Type /p13 questsdemo again to remove them.")
     end
     if not win then BuildWindow() end
     win:Show()
