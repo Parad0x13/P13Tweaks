@@ -364,3 +364,11 @@ quest enemy arrow, free keys, Zephras terrain, flight master map icons). Commit/
   flight) and, if still different, sends `Y^<name>` (at most once per 20 s per person) and the named client answers with a full list (C...E). `F` from someone I have no live copy of
   also triggers `Y`. Lists that came in the old `Q` format (`m.legacy`) are not compared. `m.sync` = true/false/nil feeds the status text. Opening the window no longer sends hello/full.
   Also: quests I hold that a teammate already finished are flagged ("- finished by Ann" in by-quest / by-player, "[done]" in side by side, a chat line when the "D" arrives, Catch up section).
+- **v0.11.1**: FollowClick also follows a player you Shift+left-click in the 3D world: hidden `SecureActionButtonTemplate` "P13TweaksFollowWorld" (macro `/follow [@mouseover,help,nodead] mouseover`)
+  bound with `SetOverrideBindingClick(worldBtn, true, "SHIFT-BUTTON1", ..., "LeftButton")` (replaces the default Shift+click on the world; option `followClickWorld`). Out of combat only.
+  Party frames: also the newer `PartyFrame.MemberFrame1-4`. `/p13 followdebug` lists the unit frames found, whether Shift-click follow is set on each, and what Shift+left-click is bound to
+  - use it if the portrait click doesn't work (the portrait path relies on the game honouring `shift-type1` on its own secure unit frames; not verified in game).
+- **v0.12.0 TaggedMarks** (new file `Features/TaggedMarks.lua`, in both .tocs - full game restart once): a skull (raid-target icon 8) above the nameplate of every enemy a group member is TARGETING
+  ("tagged" here = targeted; the game has no addon-readable "who hit first"). Every 0.2 s: collect `UnitGUID(partyNtarget / raidNtarget)` of alive attackable targets, then for each
+  `C_NamePlate.GetNamePlates()` plate whose unit GUID matches, show a child frame anchored above `plate.UnitFrame`; hidden on `NAME_PLATE_UNIT_REMOVED` / when no longer targeted. Works with
+  teammates who lack P13Tweaks. Needs enemy nameplates on in the game's settings. Option `taggedMarks` (Combat tab > Group). Not verified in game.

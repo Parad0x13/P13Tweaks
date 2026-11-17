@@ -22,10 +22,11 @@ local LAYOUT = {
         { "Target range", { "rangeBeep", "rangeDot" } },
         { "Levelling", { "killsToLevel", "killTally" } },
         { "Spells", { "spellReady" } },
+        { "Group", { "taggedMarks" } },
     } },
     { name = "Quests", icon = "Interface\\Icons\\INV_Scroll_03", sections = {
         { "Quest enemies", { "questMobArrow" } },
-        { "Group", { "questShare", "questShareTooltips", "questShareRemember", "questShareAuto", "questHow", "followClick" } },
+        { "Group", { "questShare", "questShareTooltips", "questShareRemember", "questShareAuto", "questHow", "followClick", "followClickWorld" } },
     } },
     { name = "Towns", icon = "Interface\\Icons\\INV_Misc_Bag_10", sections = {
         { "Townsfolk", { "minimapTownsfolk", "worldmapTownsfolk" } },
