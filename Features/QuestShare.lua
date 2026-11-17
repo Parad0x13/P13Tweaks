@@ -186,6 +186,29 @@ local function Send(msg)
     if #queue > 0 and not ticker then ticker = C_Timer.NewTicker(0.3, Pump) end
 end
 
+-- Remembers a quest id seen in the group, plus the quests that decide whether someone can take it
+-- (earlier quests in its chain, exclusive ones): everyone then reports those they've finished.
+local function Track(id, title)
+    seen[id] = title or seen[id] or true
+    if ns.QuestRelated then
+        for _, r in ipairs(ns.QuestRelated(id)) do
+            if not seen[r] then seen[r] = true end
+        end
+    end
+end
+
+-- Tells the group my level, race, class and how full my quest log is, so they can tell whether I can accept a quest.
+local lastCount
+local function SendProfile()
+    if not (Sharing() and Channel()) then return end
+    local _, _, raceId = UnitRace("player")
+    local _, _, classId = UnitClass("player")
+    local n = 0
+    for _ in pairs(myQuests) do n = n + 1 end
+    lastCount = n
+    Send(("P^%d^%d^%d^%d"):format(UnitLevel("player") or 0, raceId or 0, classId or 0, n))
+end
+
 -- Re-reads my quest log; when sharing, sends only what changed since last time.
 local function UpdateMine()
     local quests, collapsed = Snapshot()
@@ -203,7 +226,10 @@ local function UpdateMine()
         end
     end
     myQuests = quests
-    for id, q in pairs(quests) do seen[id] = q.title end
+    for id, q in pairs(quests) do Track(id, q.title) end
+    local count = 0
+    for _ in pairs(quests) do count = count + 1 end
+    if count ~= lastCount then SendProfile() end   -- my quest log filled up or emptied
     Later("done", 3, function() ReportDone() end)
     Later("window", 0.2, function() RefreshWindow() end)
 end
@@ -223,12 +249,15 @@ local function SendFull()
     if not (Sharing() and Channel()) then return end
     -- The full list replaces any quest messages still waiting to go out.
     for i = #queue, 1, -1 do
-        if queue[i]:find("^[QRCD]") then table.remove(queue, i) end
+        if queue[i]:find("^[QRCDPE]") then table.remove(queue, i) end
     end
     wipe(lastSent)
     wipe(sentDone)
     Send("C^" .. ns.version)
+    SendProfile()
     UpdateMine()
+    ReportDone()
+    Send("E")   -- end of my list: teammates show it (and everyone else's) all at once
 end
 
 local function SayHello()
@@ -242,6 +271,40 @@ end
 local function ShortName(sender)
     if Ambiguate then return Ambiguate(sender, "none") end
     return sender
+end
+
+-- Full lists that are still arriving: who -> { m = the new member data, complete = true once their "E" came }.
+-- Nothing is shown from them until every list in progress is complete (or SYNC_TIMEOUT seconds pass).
+local incoming = {}
+local SYNC_TIMEOUT = 12
+local ApplyIncoming
+
+-- "Syncing..." is shown from the moment I ask the group to resend until their lists have landed
+-- (or 8 s have passed with no answer), so a window that hasn't heard back yet never looks "in sync".
+local syncWait = 0
+local function IsSyncing() return next(incoming) ~= nil or GetTime() < syncWait end
+local function StartSync()
+    syncWait = GetTime() + 8
+    C_Timer.After(8.2, function() RefreshWindow() end)
+end
+
+local function TryApply()
+    for _, p in pairs(incoming) do
+        if not p.complete then return end
+    end
+    ApplyIncoming()
+end
+
+ApplyIncoming = function()
+    if next(incoming) == nil then return end
+    for who, p in pairs(incoming) do
+        local old = members[who]
+        if old and old.heard then p.m.heard = math.max(p.m.heard or 0, old.heard) end
+        members[who] = p.m
+        incoming[who] = nil
+    end
+    syncWait = 0
+    RefreshWindow()
 end
 
 -- Says so once if a teammate's P13Tweaks is a different version from mine.
@@ -270,34 +333,55 @@ local function OnMessage(msg, sender)
         end
         Later("full", 2, SendFull)   -- they just arrived (or reloaded): send them my list
     elseif kind == "C" then
+        -- A full list is starting. Collect it on the side and show it only once it's complete
+        -- (and everyone else's is), so the window changes once instead of piece by piece.
         local ver = msg:match("^C%^(.+)$") or (m and m.version)
-        members[who] = { quests = {}, protocol = m and m.protocol, version = ver }
+        incoming[who] = { complete = false,
+            m = { quests = {}, done = {}, protocol = m and m.protocol, version = ver } }
         CheckVersion(who, ver)
+        Later("applyTimeout", SYNC_TIMEOUT, ApplyIncoming)   -- never wait forever on a teammate who doesn't finish
+        Later("window", 0.2, function() RefreshWindow() end) -- shows "Syncing..."
+    elseif kind == "E" then
+        if incoming[who] then incoming[who].complete = true; TryApply() end
     elseif kind == "X" then
         members[who] = nil
+        incoming[who] = nil
     elseif kind == "Q" then
         local id, q = Decode(msg)
         if id then
-            if not m then m = { quests = {} }; members[who] = m end
-            m.quests[id] = q
-            m.done = m.done or {}
-            m.done[id] = nil
-            seen[id] = q.title
+            local t = (incoming[who] and incoming[who].m) or m
+            if not t then t = { quests = {} }; members[who] = t end
+            t.quests[id] = q
+            t.done = t.done or {}
+            t.done[id] = nil
+            Track(id, q.title)
             Later("done", 2, function() ReportDone() end)   -- if I've finished it, say so
+        end
+    elseif kind == "P" then
+        local lvl, race, class, n = msg:match("^P%^(%d+)%^(%d+)%^(%d+)%^(%d+)")
+        if lvl then
+            local t = (incoming[who] and incoming[who].m) or m
+            if not t then t = { quests = {} }; members[who] = t end
+            t.level, t.race, t.class, t.numQuests = tonumber(lvl), tonumber(race), tonumber(class), tonumber(n)
         end
     elseif kind == "D" then
         local id = tonumber(msg:match("^D%^(%d+)"))
         if id then
-            if not m then m = { quests = {} }; members[who] = m end
-            m.done = m.done or {}
-            m.done[id] = true
+            local t = (incoming[who] and incoming[who].m) or m
+            if not t then t = { quests = {} }; members[who] = t end
+            t.done = t.done or {}
+            t.done[id] = true
         end
     elseif kind == "R" then
         local id = tonumber(msg:match("^R%^(%d+)"))
-        if m and id then m.quests[id] = nil end
+        local t = (incoming[who] and incoming[who].m) or m
+        if t and id then t.quests[id] = nil end
     end
-    if members[who] then members[who].heard = GetTime() end   -- for "Ask again": did they answer?
-    Later("window", 0.2, function() RefreshWindow() end)
+    local now = GetTime()   -- for "Ask again": did they answer?
+    if members[who] then members[who].heard = now end
+    if incoming[who] then incoming[who].m.heard = now end
+    -- While a list is still arriving the window waits; it refreshes once, when everything has landed.
+    if next(incoming) == nil then Later("window", 0.2, function() RefreshWindow() end) end
 end
 
 ---------------------------------------------------------------------------
@@ -321,7 +405,7 @@ end
 
 local function OnRoster()
     if not Channel() then
-        wipe(roster); wipe(queue); wipe(lastSent); wipe(sentDone); wipe(seen)
+        wipe(roster); wipe(queue); wipe(lastSent); wipe(sentDone); wipe(seen); wipe(incoming)
         for name, m in pairs(members) do if not m.demo then members[name] = nil end end
         RefreshWindow()
         return
@@ -330,10 +414,14 @@ local function OnRoster()
     for name, m in pairs(members) do
         if not m.demo and not now[name] then members[name] = nil end   -- left the group
     end
+    for name in pairs(incoming) do
+        if not now[name] then incoming[name] = nil end
+    end
     local someoneNew = false
     for name in pairs(now) do if not roster[name] then someoneNew = true end end
     roster = now
     if someoneNew then
+        StartSync()
         SayHello()                  -- everyone with P13Tweaks answers with their list...
         Later("full", 3, SendFull)  -- ...and they get mine
     end
@@ -363,13 +451,13 @@ local function VerTag(v)
     return (v == ns.version and " |cff808080v" or " |cffff6040v") .. v .. "|r"
 end
 
--- "quest" (by quest), "compare" (side by side), "player" (by player)
+-- "quest" (by quest), "compare" (side by side), "plan" (what to do to get in sync), "player" (by player)
 local function ViewMode()
     local v = ns:Get("questShareView")
-    return (v == "player" or v == "compare") and v or "quest"
+    return (v == "player" or v == "compare" or v == "plan") and v or "quest"
 end
-local NEXT_VIEW = { quest = "compare", compare = "player", player = "quest" }
-local VIEW_LABEL = { quest = "View: by quest", compare = "View: side by side", player = "View: by player" }
+local NEXT_VIEW = { quest = "compare", compare = "plan", plan = "player", player = "quest" }
+local VIEW_LABEL = { quest = "View: by quest", compare = "View: side by side", plan = "View: sync plan", player = "View: by player" }
 
 -- Side-by-side layout (pixels)
 local CMP_TITLE, CMP_COL, CMP_GAP = 150, 78, 56
@@ -409,10 +497,36 @@ local function PushQuest(id)
     return true
 end
 
--- Does anyone with P13Tweaks in the group still need this quest (haven't got it, haven't finished it)?
+local function MaxQuests()
+    return (C_QuestLog and C_QuestLog.GetMaxNumQuestsCanAccept and C_QuestLog.GetMaxNumQuestsCanAccept())
+        or MAX_QUESTLOG_QUESTS or 20
+end
+
+-- Reasons a teammate couldn't accept a quest I share with them (empty = nothing known to stop them).
+-- Needs the teammate to have sent their level/race/class (a recent P13Tweaks) and QuestieDB for the quest data.
+local function WhyNot(m, name, id)
+    local reasons, refs = {}, {}
+    if m.level and ns.WhyCantTake then
+        reasons, refs = ns.WhyCantTake(id, {
+            name = name, level = m.level, raceId = m.race, classId = m.class, checkPrereqs = true,
+            done = function(i) return m.done and m.done[i] end,
+            has = function(i) return m.quests[i] ~= nil end,
+        })
+        reasons, refs = reasons or {}, refs or {}
+    end
+    if m.numQuests and m.numQuests >= MaxQuests() then
+        table.insert(reasons, name .. "'s quest log is full")
+    end
+    return reasons, refs   -- refs: quest ids they'd need to find first (clickable in the sync plan)
+end
+
+-- Does anyone with P13Tweaks in the group still need this quest (haven't got it, haven't finished it,
+-- and could actually accept it)?
 local function NeededBySomeone(id)
-    for _, m in pairs(members) do
-        if not m.demo and not m.quests[id] and not (m.done and m.done[id]) then return true end
+    for name, m in pairs(members) do
+        if not m.demo and not m.quests[id] and not (m.done and m.done[id]) and #WhyNot(m, name, id) == 0 then
+            return true
+        end
     end
 end
 
@@ -437,6 +551,7 @@ end
 -- "Ask again": ask everyone to resend, wait a few seconds, then say who answered.
 local function AskAgain()
     local t0 = GetTime()
+    StartSync()
     lastCheck = { "|cff808080Checking...|r" }
     RefreshWindow()
     SayHello()
@@ -475,7 +590,7 @@ local function QuestButton(i)
     b:GetHighlightTexture():SetVertexColor(1, 1, 1, 0.12)
     b:SetScript("OnClick", function(self)
         if self.guide then   -- a quest I don't have: how do I get it?
-            ns.ShowQuestGuide(self.guide, self.guideTitle)
+            ns.ShowQuestGuide(self.guide, self.guideTitle, self.guideWho and { forName = self.guideWho } or nil)
             return
         end
         local ok, why = PushQuest(self.questId)
@@ -484,7 +599,8 @@ local function QuestButton(i)
     end)
     b:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText(self.guide and "Click to see how to get this quest" or "Click to share this quest with your group", 1, 1, 1)
+        GameTooltip:SetText(self.guide and (self.guideWho and "Click to see where this quest starts" or "Click to see how to get this quest")
+            or "Click to share this quest with your group", 1, 1, 1)
         GameTooltip:Show()
     end)
     b:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -580,7 +696,17 @@ local function BuildWindow()
     emptyText:SetWordWrap(true)
 
     win:Hide()   -- a new frame starts shown; callers show it (otherwise the first toggle would hide it)
-    win:SetScript("OnShow", function() RefreshWindow() end)
+    -- Opening the window re-syncs with the group (quietly, at most once every 10 s).
+    local lastAuto = 0
+    win:SetScript("OnShow", function()
+        if Sharing() and Channel() and GetTime() - lastAuto > 10 then
+            lastAuto = GetTime()
+            StartSync()                  -- show "Syncing..." until the answers are in
+            SayHello()                   -- everyone with P13Tweaks sends me their list again...
+            Later("full", 1, SendFull)   -- ...and I send them mine
+        end
+        RefreshWindow()
+    end)
 end
 
 local function SortedQuests(quests)
@@ -708,11 +834,9 @@ local KIND_COLOR = { ready = "|cff40ff40", failed = "|cffff4040", done = "|cff40
 -- Side by side: one column per player (you first), one row per quest, plus a gap column.
 -- Whoever is furthest along on a quest is green, anyone behind is amber.
 local function BuildCompare(out)
+    -- Only teammates get a column (you're never listed); your own quests still make rows,
+    -- so you can see where everyone else is on them.
     local players = {}
-    local _, myClass = UnitClass("player")
-    local mc = myClass and RAID_CLASS_COLORS and RAID_CLASS_COLORS[myClass]
-    table.insert(players, { name = "You", color = mc and mc.colorStr and ("|c" .. mc.colorStr) or "|cff33ff99",
-        quests = myQuests, isDone = Completed, version = ns.version })
     local names = {}
     for name in pairs(members) do table.insert(names, name) end
     table.sort(names)
@@ -725,10 +849,12 @@ local function BuildCompare(out)
     local n = #players
     local gapX = CMP_TITLE + n * CMP_COL
 
-    -- every quest anyone has
+    -- every quest anyone (including you) has
     local title, ids = {}, {}
-    for _, p in ipairs(players) do
-        for id, q in pairs(p.quests) do
+    local sources = { myQuests }
+    for _, p in ipairs(players) do sources[#sources + 1] = p.quests end
+    for _, source in ipairs(sources) do
+        for id, q in pairs(source) do
             if not title[id] then title[id] = q.title or seen[id] or "?"; table.insert(ids, id) end
         end
     end
@@ -792,6 +918,166 @@ local function BuildCompare(out)
     table.insert(out, { "|cff808080green = furthest along, amber = behind, - = not started. Click one of your quests to share it, or one you don't have to see how to get it.|r", 0, 10 })
 end
 
+-- Sync plan: what to do so everyone ends up on the same quests, as short click-through lists.
+--   Share these       quests you have that a teammate lacks (click = share with the group)
+--   Get these         quests only teammates have (click = how to get it)
+--   Ask a teammate    quests a teammate has that another teammate lacks, and you can't share
+--   Catch up          quests everyone has but at different points
+local function BuildPlan(out)
+    local names = {}
+    for name in pairs(members) do table.insert(names, name) end
+    table.sort(names)
+    if #names == 0 then return end
+
+    local players = { { me = true, quests = myQuests, isDone = Completed } }
+    for _, name in ipairs(names) do
+        local m = members[name]
+        table.insert(players, { name = name, m = m, quests = m.quests,
+            isDone = function(id) return m.done and m.done[id] end })
+    end
+    -- your own character name (in your class colour) is used wherever the plan refers to you
+    local myName = UnitName("player") or "?"
+    local myLabel = NameColor("player") .. myName .. "|r"
+    local function Label(p) return p.me and myLabel or (NameColor(p.name) .. p.name .. "|r") end
+    local function Labels(list)
+        local t = {}
+        for _, p in ipairs(list) do t[#t + 1] = Label(p) end
+        return table.concat(t, ", ")
+    end
+    local function Others(list)   -- teammates only
+        local t = {}
+        for _, p in ipairs(list) do if not p.me then t[#t + 1] = p end end
+        return t
+    end
+
+    local title, ids = {}, {}
+    for _, p in ipairs(players) do
+        for id, q in pairs(p.quests) do
+            if not title[id] then title[id] = q.title or seen[id] or "?"; table.insert(ids, id) end
+        end
+    end
+    table.sort(ids, function(a, b) return title[a] < title[b] end)
+
+    local share, get, relay, catchUp, blocked = {}, {}, {}, {}, {}
+    for _, id in ipairs(ids) do
+        local holders, lackers, info = {}, {}, {}
+        for _, p in ipairs(players) do
+            local q = p.quests[id]
+            if q then
+                holders[#holders + 1] = p
+                local text, score = CompareCell(q, false)
+                info[p] = { text = text, score = score or 0 }
+            elseif not p.isDone(id) then
+                lackers[#lackers + 1] = p
+            end
+        end
+        local mine = myQuests[id] ~= nil
+        local lackMates, holdMates = Others(lackers), Others(holders)
+        local meLacks = false
+        for _, p in ipairs(lackers) do if p.me then meLacks = true end end
+        local head = "|cffffd200" .. title[id] .. "|r"
+
+        -- Only suggest sharing with teammates who could accept it; the rest go under "can't be shared yet".
+        -- One indented line per blocked player under the quest; under it, a clickable line for each
+        -- quest they'd have to find first (opens where that quest starts).
+        local canMates, bsubs, blockedGuide = {}, {}, nil
+        local function FindLines(refs, forName)
+            local seenRef = {}
+            for _, rid in ipairs(refs or {}) do
+                if not seenRef[rid] and #bsubs < 40 then
+                    seenRef[rid] = true
+                    local rname = (myQuests[rid] and myQuests[rid].title) or (ns.QuestName and ns.QuestName(rid))
+                    table.insert(bsubs, { text = "|cff40c0ff-> find: " .. (rname or ("quest " .. rid)) .. "|r |cff808080(click)|r",
+                        indent = 40, guide = rid, who = forName or false })
+                end
+            end
+        end
+
+        -- my own blockers first (my name, then what I'd have to find), then the teammates'
+        local myWhy, myRefs = {}, {}
+        if meLacks and #holdMates > 0 and ns.WhyCantTake then myWhy, myRefs = ns.WhyCantTake(id) end
+        myWhy, myRefs = myWhy or {}, myRefs or {}
+        if #myWhy > 0 then
+            table.insert(bsubs, myLabel .. "|cffff6040: " .. table.concat(myWhy, "; ") .. "|r")
+            FindLines(myRefs, nil)
+            blockedGuide = id   -- clicking the quest shows how to get it
+        end
+        for _, p in ipairs(lackMates) do
+            local why, refs = WhyNot(p.m, p.name, id)
+            if #why == 0 then
+                canMates[#canMates + 1] = p
+            elseif #holdMates > 0 or mine then
+                table.insert(bsubs, Label(p) .. "|cffff6040: " .. table.concat(why, "; ") .. "|r")
+                FindLines(refs, p.name)
+            end
+        end
+
+        if mine and #canMates > 0 then
+            table.insert(share, { head .. " |cff808080->|r " .. Labels(canMates), id = id })
+        end
+        if meLacks and #holdMates > 0 then
+            if #myWhy == 0 then
+                table.insert(get, { head .. " |cff808080- |r" .. Labels(holdMates)
+                    .. " |cff808080has it: ask them to share it, or click to see how to get it|r", guide = id })
+            end
+        end
+        if #bsubs > 0 then
+            table.insert(blocked, { head, sub = bsubs, guide = blockedGuide })
+        end
+        if not mine and #canMates > 0 and #holdMates > 0 then
+            table.insert(relay, { head .. " |cff808080-|r " .. Labels(holdMates)
+                .. " |cff808080should share it with|r " .. Labels(canMates) })
+        end
+        if #holders >= 2 then
+            local best, worst = -1, 2
+            for _, p in ipairs(holders) do
+                best = math.max(best, info[p].score); worst = math.min(worst, info[p].score)
+            end
+            if best - worst > 0.001 then
+                -- one indented line per player under the quest
+                local subs = {}
+                for _, p in ipairs(holders) do
+                    local isBehind = info[p].score < best - 0.001
+                    table.insert(subs, Label(p) .. (isBehind and " |cffffa040" or " |cff40ff40") .. info[p].text .. "|r"
+                        .. (isBehind and " |cff808080(behind)|r" or " |cff808080(ahead)|r"))
+                end
+                table.insert(catchUp, { head, sub = subs })
+            end
+        end
+    end
+
+    local function Section(titleText, list, gap)
+        if #list == 0 then return false end
+        table.insert(out, { titleText, 0, gap })
+        for _, e in ipairs(list) do
+            table.insert(out, { e[1], 8, 3, e.id, guide = e.guide })
+            for _, s in ipairs(e.sub or {}) do
+                if type(s) == "table" then   -- a clickable line: opens where quest s.guide starts
+                    table.insert(out, { s.text, s.indent or 24, 1, guide = s.guide, guideWho = s.who })
+                else
+                    table.insert(out, { s, 24, 1 })   -- e.g. one line per player under the quest
+                end
+            end
+        end
+        return true
+    end
+    local any = false
+    any = Section("|cff40ff40Share these|r |cff808080(click one; they need to be close by, with room in their quest log)|r", share, 0) or any
+    any = Section("|cff40c0ffGet these|r |cff808080(click one to see how)|r", get, any and 12 or 0) or any
+    any = Section("|cffffa040Ask a teammate to share|r", relay, any and 12 or 0) or any
+    any = Section("|cffff6040Can't be shared yet|r |cff808080(requirements not met)|r", blocked, any and 12 or 0) or any
+    any = Section("|cffffa040Catch up|r |cff808080(same quest, different progress)|r", catchUp, any and 12 or 0) or any
+    if not any and not IsSyncing() then   -- don't claim "in sync" before the answers are in
+        table.insert(out, { "|cff40ff40Everyone is on the same quests at the same point - nothing to do.|r", 0, 0 })
+    end
+    local missing = {}
+    for name in pairs(GroupNames()) do if not members[name] then table.insert(missing, name) end end
+    table.sort(missing)
+    if #missing > 0 then
+        table.insert(out, { "|cff808080No P13Tweaks (can't be compared): " .. table.concat(missing, ", ") .. "|r", 0, 12 })
+    end
+end
+
 RefreshWindow = function()
     if not (win and win:IsShown()) then return end
     local mode = ViewMode()
@@ -802,7 +1088,7 @@ RefreshWindow = function()
     -- The side-by-side view is as wide as it needs to be; the others use the normal width.
     local wantW = 340
     if mode == "compare" then
-        local count = 1
+        local count = 0
         for _ in pairs(members) do count = count + 1 end
         wantW = math.min(900, math.max(340, CMP_TITLE + count * CMP_COL + CMP_GAP))
     end
@@ -818,7 +1104,13 @@ RefreshWindow = function()
     local out = {}
     if mode == "quest" then BuildByQuest(out)
     elseif mode == "compare" then BuildCompare(out)
+    elseif mode == "plan" then BuildPlan(out)
     else BuildByPlayer(out) end
+
+    -- While teammates' lists are still arriving the window keeps showing what it had, with a note on top.
+    if IsSyncing() then
+        table.insert(out, 1, { "|cffffd200Syncing with teammates...|r", 0, 0 })
+    end
 
     -- Result of the last "Ask again" goes on top.
     local checkText
@@ -861,7 +1153,8 @@ RefreshWindow = function()
             local b = QuestButton(nb)
             b.questId = e[4]
             b.guide = guide
-            b.guideTitle = guide and (e[1]:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r.*$", "")) or nil
+            b.guideWho = guide and e.guideWho or nil   -- set when someone else needs that quest first
+            b.guideTitle =guide and (e[1]:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r.*$", "")) or nil
             b:ClearAllPoints()
             b:SetPoint("TOPLEFT", e[2], -y)
             b:SetSize(e.titleW or (W - e[2]), h)
@@ -952,7 +1245,11 @@ ns:RegisterOption({
     label = "Share quests with my group",
     buttonText = "View",
     buttonWidth = 60,
-    onClick = function() ToggleWindow() end,
+    onClick = function()
+        ToggleWindow()
+        -- the quest window opened: close the /p13 menu this button is in
+        if win and win:IsShown() and ns.optionsFrame then ns.optionsFrame:Hide() end
+    end,
     tooltip = "Sends your quests and their progress to group members who also have P13Tweaks, and shows theirs.\n\nView (or /p13 quests) opens the list of your teammates' quests. Teammates without P13Tweaks can't show up: the game doesn't let addons read someone else's quest log.",
     default = true,
     onChange = function(on)
@@ -962,6 +1259,7 @@ ns:RegisterOption({
         else
             Send("X")
             wipe(lastSent)
+            wipe(incoming)
             for name, m in pairs(members) do if not m.demo then members[name] = nil end end
             RefreshWindow()
         end
@@ -1037,7 +1335,10 @@ local function MakeDemo(which)
     -- quests that only the pretend teammates have (so this works with an empty quest log too)
     quests[9990001] = { title = "Demo: Boars In The Hills", state = 0, objs = { { "Boars slain: " .. (which == 1 and "2" or "7") .. "/10", false } } }
     quests[9990002] = { title = "Demo: Lost Supplies", state = 0, objs = { { "Crates found: " .. (which == 1 and "3" or "0") .. "/3", which == 1 }, { "Scout spoken to: 0/1", false } } }
-    return { quests = quests, done = done, demo = true, version = which == 1 and ns.version or "0.3.9" }
+    -- Bob is level 1, so quests with a level requirement land under "Can't be shared yet" in the sync plan.
+    return { quests = quests, done = done, demo = true, version = which == 1 and ns.version or "0.3.9",
+        level = which == 1 and UnitLevel("player") or 1, race = select(3, UnitRace("player")),
+        class = select(3, UnitClass("player")), numQuests = 5 }
 end
 
 ns:RegisterCommand("questsdemo", "add (or remove) two pretend teammates to try the quest window alone", function()
@@ -1071,9 +1372,12 @@ frame:RegisterEvent("GROUP_ROSTER_UPDATE")
 frame:RegisterEvent("QUEST_LOG_UPDATE")
 frame:RegisterEvent("CHAT_MSG_ADDON")
 frame:RegisterEvent("QUEST_DETAIL")
+frame:RegisterEvent("PLAYER_LEVEL_UP")
 frame:SetScript("OnEvent", function(self, event, a1, a2, a3, a4)
     if event == "PLAYER_LOGIN" then
         pcall(HookTooltips)
+    elseif event == "PLAYER_LEVEL_UP" then
+        Later("profile", 3, SendProfile)
     elseif event == "QUEST_DETAIL" then
         -- A group member shared a quest: the "npc" giving it is a player in my group.
         if ns:Get("questShareAuto") and UnitIsPlayer("npc") and (UnitInParty("npc") or UnitInRaid("npc")) then

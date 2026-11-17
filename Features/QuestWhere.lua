@@ -49,43 +49,112 @@ end
 -- What blocks you from taking a quest
 ---------------------------------------------------------------------------
 
-local function Blockers(lib, id)
+-- Who the checks are for: me (the default), or a teammate described by what they told us:
+-- { name, level, raceId, classId, done = fn(id), has = fn(id), checkPrereqs = true }.
+local function Me()
+    local _, _, raceId = UnitRace("player")
+    local _, _, classId = UnitClass("player")
+    return { level = UnitLevel("player"), raceId = raceId, classId = classId, done = Done, has = InLog }
+end
+
+local function Blockers(lib, id, who)
+    who = who or Me()
     local out = {}
-    local level = UnitLevel("player")
+    local refs = {}   -- quest ids mentioned above that the player could go and find (second return value)
+    local are = who.name and (who.name .. " is") or "you're"
+    local they = who.name or "you"
+    local level = who.level
     local need = Get(lib.Quest, id, "requiredLevel")
-    if type(need) == "number" and need > level then
-        out[#out + 1] = ("needs level %d (you're %d)"):format(need, level)
+    if level and type(need) == "number" and need > level then
+        out[#out + 1] = ("needs level %d (%s %d)"):format(need, are, level)
     end
     local maxLevel = Get(lib.Quest, id, "requiredMaxLevel")
-    if type(maxLevel) == "number" and maxLevel > 0 and level > maxLevel then
-        out[#out + 1] = ("only for level %d or lower (you're %d)"):format(maxLevel, level)
+    if level and type(maxLevel) == "number" and maxLevel > 0 and level > maxLevel then
+        out[#out + 1] = ("only for level %d or lower (%s %d)"):format(maxLevel, are, level)
     end
     local races = Get(lib.Quest, id, "requiredRaces")
-    local _, _, raceId = UnitRace("player")
+    local raceId = who.raceId
     if type(races) == "number" and races > 0 and raceId and raceId <= 31
         and bit.band(races, bit.lshift(1, raceId - 1)) == 0 then
-        out[#out + 1] = "not available to your race"
+        out[#out + 1] = "not available to " .. (who.name and "their" or "your") .. " race"
     end
     local classes = Get(lib.Quest, id, "requiredClasses")
-    local _, _, classId = UnitClass("player")
+    local classId = who.classId
     if type(classes) == "number" and classes > 0 and classId and classId <= 31
         and bit.band(classes, bit.lshift(1, classId - 1)) == 0 then
-        out[#out + 1] = "not available to your class"
+        out[#out + 1] = "not available to " .. (who.name and "their" or "your") .. " class"
     end
     for _, other in ipairs(IdList(Get(lib.Quest, id, "exclusiveTo"))) do
-        if Done(other) or InLog(other) then
-            out[#out + 1] = ("you can't take it because of \"%s\" (%s)"):format(QName(lib, other), Done(other) and "done" or "in your log")
+        local d, h = who.done(other), who.has(other)
+        if d or h then
+            out[#out + 1] = ("%s can't take it because of \"%s\" (%s)"):format(they, QName(lib, other), d and "done" or "in their log")
         end
     end
     local parent = Get(lib.Quest, id, "parentQuest")
-    if type(parent) == "number" and parent > 0 and not InLog(parent) and not Done(parent) then
-        out[#out + 1] = ("it starts from inside \"%s\" - take that quest first"):format(QName(lib, parent))
+    if type(parent) == "number" and parent > 0 and not who.has(parent) and not who.done(parent) then
+        out[#out + 1] = ("it starts from inside \"%s\" - that quest comes first"):format(QName(lib, parent))
+        refs[#refs + 1] = parent
+    end
+    if who.checkPrereqs then
+        for _, pid in ipairs(IdList(Get(lib.Quest, id, "preQuestGroup"))) do
+            if not who.done(pid) then
+                out[#out + 1] = ("needs \"%s\" finished first"):format(QName(lib, pid))
+                refs[#refs + 1] = pid
+            end
+        end
+        local single = IdList(Get(lib.Quest, id, "preQuestSingle"))
+        if #single > 0 then
+            local any = false
+            for _, pid in ipairs(single) do if who.done(pid) then any = true end end
+            if not any then
+                local names = {}
+                for i = 1, math.min(3, #single) do
+                    names[i] = "\"" .. QName(lib, single[i]) .. "\""
+                    refs[#refs + 1] = single[i]
+                end
+                out[#out + 1] = "needs one of these finished first: " .. table.concat(names, ", ")
+            end
+        end
     end
     local rep = Get(lib.Quest, id, "requiredMinRep")
     if type(rep) == "table" and rep[1] then
         out[#out + 1] = ("needs a reputation standing with a faction (faction id %s)"):format(tostring(rep[1]))
     end
-    return out
+    return out, refs
+end
+
+-- Used by QuestShare.lua. Reasons a teammate (or me, when who is nil) can't take a quest right now,
+-- as a list of sentences - empty when nothing is known to stop them, nil when QuestieDB isn't there.
+function ns.QuestName(id)
+    local lib = Lib()
+    return lib and Get(lib.Quest, id, "name") or nil
+end
+
+function ns.WhyCantTake(id, who)
+    local lib = Lib()
+    if not lib then return nil end
+    if who == nil then
+        who = Me(); who.checkPrereqs = true
+    end
+    return Blockers(lib, id, who)
+end
+
+-- Quest ids whose "finished" status decides whether someone can take this quest (earlier quests in the
+-- chain, exclusive quests, the parent), so QuestShare can have every player report them.
+local relatedCache = {}
+function ns.QuestRelated(id)
+    if relatedCache[id] then return relatedCache[id] end
+    local list = {}
+    local lib = Lib()
+    if lib then
+        for _, field in ipairs({ "preQuestGroup", "preQuestSingle", "exclusiveTo" }) do
+            for _, x in ipairs(IdList(Get(lib.Quest, id, field))) do list[#list + 1] = x end
+        end
+        local parent = Get(lib.Quest, id, "parentQuest")
+        if type(parent) == "number" and parent > 0 then list[#list + 1] = parent end
+        relatedCache[id] = list   -- only cache real answers (not "QuestieDB isn't ready yet")
+    end
+    return list
 end
 
 ---------------------------------------------------------------------------
@@ -304,7 +373,9 @@ local function ShowPanel(lines, place)
 end
 
 -- Opens the panel for a quest id. fallbackTitle is the name the teammate sent.
-function ns.ShowQuestGuide(id, fallbackTitle)
+-- opts.forName: someone else needs this quest finished first (a prerequisite of what they can't take):
+-- show where it starts, whatever my own progress on it is.
+function ns.ShowQuestGuide(id, fallbackTitle, opts)
     local lib = Lib()
     if not lib then
         ShowPanel({ "|cffffd200" .. (fallbackTitle or ("Quest " .. id)) .. "|r", "",
@@ -323,6 +394,27 @@ function ns.ShowQuestGuide(id, fallbackTitle)
     local qlevel = Get(lib.Quest, id, "questLevel")
     L[#L + 1] = "|cffffd200" .. name .. "|r" .. ((type(qlevel) == "number" and qlevel > 0) and ("  |cff808080(level " .. qlevel .. ")|r") or "")
     L[#L + 1] = ""
+
+    if opts and opts.forName then
+        L[#L + 1] = ("|cffffa040%s needs this quest finished first.|r"):format(opts.forName)
+        local need = Get(lib.Quest, id, "requiredLevel")
+        if type(need) == "number" and need > 1 then L[#L + 1] = ("It needs level %d."):format(need) end
+        if Done(id) then
+            L[#L + 1] = "|cff40ff40You've finished it yourself.|r It starts from:"
+        elseif InLog(id) then
+            L[#L + 1] = "|cff8fa8ffIt's in your log.|r It starts from:"
+        else
+            L[#L + 1] = "It starts from:"
+        end
+        local gives, best = Starters(lib, id)
+        if #gives == 0 then
+            L[#L + 1] = "   QuestieDB doesn't say who gives it."
+        else
+            for _, line in ipairs(DescribeStarters(gives)) do L[#L + 1] = line end
+        end
+        ShowPanel(L, best)
+        return
+    end
 
     if Done(id) then
         L[#L + 1] = "|cff40ff40You've already completed this quest.|r"

@@ -14,6 +14,7 @@ local LAYOUT = {
         { "Finding yourself", { "mapPlayerCircle", "mapMiddleClick", "mapCenterButton", "mapSmoothPan" } },
         { "Look", { "mapTerrain", "mapTerrainLabels", "mapTerrainButton", "mapCaveView", "mapOverlay" } },
         { "Travel", { "mapRoute", "flightPoints", "flightPointsTaxi" } },
+        { "Drawing", { "mapDraw", "mapDrawFade" } },
     } },
     { name = "Combat", icon = "Interface\\Icons\\Ability_DualWield", sections = {
         { "Aggro range", { "aggroRange", "aggroBeep" } },
@@ -476,6 +477,8 @@ function ns:CreateOptionsUI()
     questsBtn:SetScript("OnClick", function()
         local c = ns.commands["quests"]
         if c then c.func() end
+        local w = _G.P13TweaksTeamQuests
+        if w and w:IsShown() then f:Hide() end   -- the quest window opened: close this menu
     end)
 
     -- one page per tab

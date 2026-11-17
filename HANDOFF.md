@@ -232,3 +232,47 @@ quest enemy arrow, free keys, Zephras terrain, flight master map icons). Commit/
   Untested in game; the pretend teammates' fake quests (9990001/2) have no QuestieDB record by design.
 - **v0.5.1**: fixed "tap twice after /reload": `BuildWindow` left the new quests window shown, so the first `ToggleWindow`
   hid it. It now `Hide()`s at the end of the build (callers show it).
+- **v0.5.2**: opening the quests window re-syncs with the group: `OnShow` sends the hello (teammates resend their lists)
+  and schedules `SendFull` for mine, quietly, at most once per 10 s, only when sharing is on and you're grouped.
+- **v0.5.3**: opening the quests window from the /p13 menu (footer "Teammates' quests" button and the "View" button next to
+  "Share quests with my group") closes the /p13 window, only when the quests window actually opened.
+- **v0.5.4**: "You" is never shown in the quests window: the side-by-side view no longer has a "You" column (teammates only; your
+  own quests still make rows so you can see where everyone else is on them; colours/gap are among teammates).
+- **v0.6.0**: fourth quests-window view "sync plan" (View button cycles quest -> side by side -> sync plan -> player;
+  `questShareView` = quest/compare/plan/player). `BuildPlan`: sections "Share these" (you hold it, a teammate lacks it;
+  click = `PushQuest`), "Get these" (only teammates hold it; click = QuestWhere panel), "Ask a teammate to share" (a teammate holds
+  it, another lacks it, you don't hold it), "Catch up" (2+ holders at different progress, via `CompareCell` scores). Players who
+  finished a quest count as neither holders nor lackers. "You" is only ever written lowercase inside sentences, never as a label.
+- **v0.6.1**: the sync plan no longer suggests sharing a quest a teammate can't accept. New message `P^level^race^class^numQuests`
+  (sent after `C` in `SendFull`, on level-up, and when my quest count changes); members get `.level/.race/.class/.numQuests`.
+  `WhyNot(m, name, id)` (QuestShare) uses `ns.WhyCantTake(id, who)` (QuestWhere `Blockers(lib,id,who)`, now parametrised for
+  a teammate: level, max level, race/class bitmask, exclusiveTo, parentQuest, preQuestGroup/Single) plus "quest log full".
+  Teammates who can't take it go under "Can't be shared yet" with the reasons; "Share all" skips them too. Prerequisite /
+  exclusive quest ids are tracked (`Track` + `ns.QuestRelated`) so everyone reports (D) whether they've finished them.
+  Only applies to teammates on 0.6.1+ (they send P); older ones are assumed able. Range (they must be close) isn't checked.
+- **v0.6.2**: teammate data now lands all at once. New message `E` (end of a full list; `SendFull` = C, P, all Q, D, E). On `C`
+  the receiver collects that teammate's list in `incoming[who]` (live `members[who]` untouched, window shows the old data plus
+  "Syncing with teammates..."); on `E` it marks complete, and when every list in progress is complete (`TryApply`) or after
+  `SYNC_TIMEOUT` (12 s, for clients without `E`) all are swapped in together (`ApplyIncoming`) and the window refreshes once.
+  Single deltas (Q/R/D/P outside a full list) still apply immediately. No protocol bump: old clients ignore `E`.
+- **v0.6.3**: "Syncing with teammates..." now shows from the moment a resync is asked for (window opens, "Ask again", someone joins:
+  `StartSync()` = 8 s window, `IsSyncing()`) until the lists land (`ApplyIncoming` clears it), not only after the first `C`
+  arrives. The sync plan no longer says "Everyone is on the same quests" while syncing.
+- **v0.6.4**: sync plan "Catch up": the quest is one line, then one indented line per player ("Ann 3/10 (behind)", "Bob 10/10 (ahead)")
+  via `e.sub` in `Section`.
+- **v0.6.5**: sync plan uses your own character name (class colour) instead of the word "you" (`myLabel`; `NameColor("player")`).
+- **v0.6.6**: sync plan "Can't be shared yet": one line per quest, then one indented line per player with their reasons
+  (your own name first when it's you), instead of repeating the quest on every line. Clicking the quest opens the how-to panel when you're the one blocked.
+- **v0.7.0 MapDraw** (new file `Features/MapDraw.lua`, in both .tocs - needs a FULL GAME RESTART once): "Draw" button in the map button row
+  (order 30; Undo 31 / Clear mine 32 appear while drawing). Draw mode puts a mouse `catcher` frame over `ScrollContainer`
+  (level +90, right-click passes through via `SetPassThroughButtons` if present); left-drag samples `sc:GetNormalizedCursorPosition()`
+  (0..1 map coords) every >= 0.005 apart, max 300 points. Lines are drawn in a layer under `sc.Child` exactly like MapRoute (scaled 1/canvasScale,
+  pooled `CreateLine`s, redrawn when `version`/map/scale changes). Sharing: prefix `P13M`, `S^map^id^part^parts^RRGGBB^points` (points = 4 chars each,
+  two 12-bit base-64 numbers; 50 points per message; own token bucket 4 burst, 1 per 1.5 s), `U^id` undo, `X` clear. Strokes carry the sender's class colour.
+  Newcomers get my strokes resent (3 s after the roster changes); lines of people who leave are dropped. Options `mapDraw`, `mapDrawFade` (+ `mapDrawFadeMinutes`, default 5;
+  last 30 s fade out). `/p13 mapdraw clear | demo` (demo = two pretend teammates' sine-wave lines on the open map). Untested in game.
+  Note: normally LEFT-drag pans the map; while drawing it draws instead.
+- **v0.7.1**: sync plan "Can't be shared yet": under each blocked player's line, a clickable "-> find: <quest>" line for every quest they'd have to
+  finish first (prerequisites, the parent quest). `Blockers()` (QuestWhere) now returns `reasons, refs`; `ns.WhyCantTake` and `WhyNot` pass `refs` on;
+  `ns.QuestName(id)` added. Clicking opens `ns.ShowQuestGuide(id, title, { forName = "Ann" })` = where that quest starts + waypoint, whatever
+  your own progress on it is ("you've finished it yourself" / "it's in your log" are noted). Plan sub-lines may now be tables `{text, indent, guide, who}`.
