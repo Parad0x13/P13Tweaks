@@ -1,6 +1,6 @@
 # P13Tweaks – Handoff (2026-11-17)
 
-## Handover summary (v0.14.3; newest changes are the last bullets of this file, v0.13.5 ... v0.14.3, all untested in game)
+## Handover summary (v0.14.4; newest changes are the last bullets of this file, v0.13.5 ... v0.14.4, all untested in game)
 **NOTHING from v0.2.0 onward has been run in the game** (no Lua interpreter on this PC; every file was only read back, never executed). Expect load errors on first `/reload`:
 turn on `/console scriptErrors 1` and fix what the popups say. Several new files need a full game restart (they were added to the .tocs): MapDraw, MapQuestHints, FollowClick,
 TaggedMarks, QuestWhere, Version.lua. Version is kept in THREE places and bumped every update: `Version.lua`, and `## Version:` in both .tocs.
@@ -414,3 +414,4 @@ quest enemy arrow, free keys, Zephras terrain, flight master map icons). Commit/
 - **v0.14.0-0.14.3 BagMiddleSort** (new file, in both .tocs; option `bagMiddleSort`, Towns > Bags): middle-click a bag slot sorts. Slot hooks (OnMouseDown/Up) + a GLOBAL_MOUSE_UP
   fallback; default bags use `C_Container.SortBags`/`SortBags`; Bagnon/BagBrother frames (have `SortItems`, `IsCached`) call their own `SortItems()` (the cleanup button action).
   `/p13 bagdebug` shows what the mouse is over. UNTESTED in game; needs a full restart (new file).
+- **v0.14.4 Profession trainer submenu** (Features/ProfCap.lua): the portrait menu now has one "Mark closest Profession Trainer" submenu listing ALL_PROFS (every profession; Inscription/Jewelcrafting gated by build; unlearned ones greyed but still work via SecondaryProf stand-in). `/p13 prof <name>` also searches ALL_PROFS. Untested in game.

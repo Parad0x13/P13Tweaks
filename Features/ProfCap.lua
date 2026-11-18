@@ -494,8 +494,25 @@ local SECONDARY = {
     { skillLine = 185, name = "Cooking",   icon = "Interface\\Icons\\INV_Misc_Food_15" },
     { skillLine = 356, name = "Fishing",   icon = "Interface\\Icons\\Trade_Fishing" },
 }
-local IS_SECONDARY = {}
-for _, s in ipairs(SECONDARY) do IS_SECONDARY[s.skillLine] = true end
+
+-- Every profession offered in the menu: primaries, then secondaries (only ones this game has).
+local BUILD = select(4, GetBuildInfo()) or 0
+local ALL_PROFS = {
+    { skillLine = 171, name = "Alchemy",        icon = "Interface\\Icons\\Trade_Alchemy" },
+    { skillLine = 164, name = "Blacksmithing",  icon = "Interface\\Icons\\Trade_BlackSmithing" },
+    { skillLine = 333, name = "Enchanting",     icon = "Interface\\Icons\\Trade_Engraving" },
+    { skillLine = 202, name = "Engineering",    icon = "Interface\\Icons\\Trade_Engineering" },
+    { skillLine = 182, name = "Herbalism",      icon = "Interface\\Icons\\Trade_Herbalism" },
+}
+if BUILD >= 30000 then table.insert(ALL_PROFS, { skillLine = 773, name = "Inscription", icon = "Interface\\Icons\\INV_Inscription_Tradeskill01" }) end
+if BUILD >= 20000 then table.insert(ALL_PROFS, { skillLine = 755, name = "Jewelcrafting", icon = "Interface\\Icons\\INV_Misc_Gem_01" }) end
+for _, s in ipairs({
+    { skillLine = 165, name = "Leatherworking", icon = "Interface\\Icons\\INV_Misc_ArmorKit_17" },
+    { skillLine = 186, name = "Mining",         icon = "Interface\\Icons\\Trade_Mining" },
+    { skillLine = 393, name = "Skinning",       icon = "Interface\\Icons\\INV_Misc_Pelt_Wolf_01" },
+    { skillLine = 197, name = "Tailoring",      icon = "Interface\\Icons\\Trade_Tailoring" },
+}) do table.insert(ALL_PROFS, s) end
+for _, s in ipairs(SECONDARY) do table.insert(ALL_PROFS, s) end
 
 -- The secondary profession as Professions() gives it if learned (so GuideTo can pick a
 -- trainer for your next rank), otherwise a stand-in with no cap (any trainer will do).
@@ -537,20 +554,16 @@ if Menu and Menu.ModifyMenu then
                 sub:CreateButton(label, function() GuideToWeaponMaster(w) end)
             end
         end
-        -- Read fresh each time the menu opens, so new/dropped professions show up.
-        -- GuideTo uses the profession's cap to pick a trainer who teaches the next rank.
+        -- Submenu with every profession. Read fresh each time the menu opens; for ones you
+        -- know, GuideTo uses the cap to pick a trainer who teaches your next rank.
         local known = Professions()
-        for _, p in ipairs(known) do
-            if PROF_WORDS[p.skillLine] and not IS_SECONDARY[p.skillLine] then
-                local icon = p.icon and ("|T" .. p.icon .. ":14:14:0:0|t ") or ""
-                root:CreateButton(icon .. "Mark closest " .. p.name .. " Trainer", function() GuideTo(p) end)
-            end
-        end
-        -- First Aid, Cooking and Fishing are always listed, even before you learn them.
-        for _, s in ipairs(SECONDARY) do
+        local sub = root:CreateButton("Mark closest Profession Trainer")
+        for _, s in ipairs(ALL_PROFS) do
             local p = SecondaryProf(s, known)
             local icon = p.icon and ("|T" .. p.icon .. ":14:14:0:0|t ") or ""
-            root:CreateButton(icon .. "Mark closest " .. p.name .. " Trainer", function() GuideTo(p) end)
+            local learned = p.max ~= nil
+            local label = icon .. (learned and p.name or ("|cff888888" .. p.name .. "|r"))
+            sub:CreateButton(label, function() GuideTo(p) end)
         end
     end)
 end
@@ -572,7 +585,7 @@ ns:RegisterOption({
     key = "classTrainerMenu",
     type = "toggle",
     label = "\"Mark closest Trainer\" items when right-clicking your portrait",
-    tooltip = "Adds \"Mark closest Class Trainer\", \"Mark closest Vendor (to sell)\" (nearest NPC who buys your items), \"Mark closest Mailbox\", \"Mark closest Auction House\", \"Mark closest Weapon Master\" (with a choice of weapon; only in games that still have weapon skills) and a \"Mark closest <Profession> Trainer\" for each of your professions (First Aid, Cooking and Fishing are always listed, even if you haven't learned them) to the menu you get by right-clicking your own portrait. Each puts a waypoint on the nearest matching trainer (needs QuestieDB). For a profession it looks for a trainer who teaches your next rank.",
+    tooltip = "Adds \"Mark closest Class Trainer\", \"Mark closest Vendor (to sell)\" (nearest NPC who buys your items), \"Mark closest Mailbox\", \"Mark closest Auction House\", \"Mark closest Weapon Master\" (with a choice of weapon; only in games that still have weapon skills) and a \"Mark closest Profession Trainer\" submenu listing every profession (ones you haven't learned are greyed, but still work) to the menu you get by right-clicking your own portrait. Each puts a waypoint on the nearest matching trainer (needs QuestieDB). For a profession it looks for a trainer who teaches your next rank.",
     default = true,
 })
 
@@ -604,8 +617,8 @@ ns:RegisterCommand("prof", "list your professions and caps; /p13 prof <name> = w
         for _, p in ipairs(list) do
             if p.name:lower():find(arg, 1, true) then GuideTo(p); return end
         end
-        -- First Aid / Cooking / Fishing work even if not learned yet.
-        for _, s in ipairs(SECONDARY) do
+        -- Any profession works, even if not learned yet.
+        for _, s in ipairs(ALL_PROFS) do
             if s.name:lower():find(arg, 1, true) then GuideTo(SecondaryProf(s, list)); return end
         end
         ns:Print("You don't have a profession matching \"" .. arg .. "\".")

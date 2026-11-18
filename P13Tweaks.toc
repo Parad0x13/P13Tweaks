@@ -2,7 +2,7 @@
 ## Title: P13Tweaks
 ## Notes: Personal quality-of-life tweaks. Type /p13 to open options.
 ## Author: bryan
-## Version: 0.14.3
+## Version: 0.14.4
 ## SavedVariables: P13TweaksDB
 ## OptionalDeps: QuestieDB
 
