@@ -1006,9 +1006,10 @@ end
 -- aren't needed any more). Ghosts show in the windows but are never offered quests to share, never asked, never counted.
 SyncGhosts = function()
     for key, m in pairs(members) do if m.ghost then members[key] = nil end end
-    if not (Remembering() and Sharing()) then return end
+    if not (Remembering() and Sharing()) or not Channel() then return end
     for key, s in pairs(SavedKnown()) do
-        if type(s) == "table" and type(s.quests) == "table" and not IsMe(key) then
+        -- only people who are in the group right now (an offline party member); anyone who left isn't shown
+        if type(s) == "table" and type(s.quests) == "table" and not IsMe(key) and KeyInGroup(key) then
             local n, live = Norm(key), false
             for k2, m in pairs(members) do
                 local kk = Norm(k2)
@@ -1375,6 +1376,26 @@ local function BuildWindow()
     end)
 end
 
+-- A class quest I can't take (my class isn't in its class mask). Teammates' class quests are only followed
+-- when they're also mine, i.e. when we're the same class. Needs QuestieDB; without it nothing is hidden.
+local function ClassLocked(id)
+    local lib = _G.LibQuestieDB
+    if not (lib and lib.Quest and lib.Quest.Get) then return false end
+    local ok, mask = pcall(lib.Quest.Get, id, "requiredClasses")
+    if not ok or type(mask) ~= "number" or mask <= 0 then return false end
+    local _, _, cid = UnitClass("player")
+    return (cid and cid <= 31 and bit.band(mask, bit.lshift(1, cid - 1)) == 0) and true or false
+end
+
+-- a teammate's quests without the other classes' class quests
+local function Visible(m)
+    local src = m.quests or {}
+    if m.demo then return src end
+    local t = {}
+    for id, q in pairs(src) do if not ClassLocked(id) then t[id] = q end end
+    return t
+end
+
 local function SortedQuests(quests)
     local list = {}
     for id, q in pairs(quests) do table.insert(list, { id = id, q = q }) end
@@ -1472,7 +1493,7 @@ end
 -- Teammates who have already FINISHED quest `id` (and don't hold it any more), while I haven't - or nil.
 -- Used to flag quests in my log that someone else has already done.
 local function FinishedBy(id)
-    if Completed(id) then return nil end
+    if Completed(id) or ClassLocked(id) then return nil end
     local names = {}
     for key, m in pairs(members) do
         if not m.demo and not (m.quests and m.quests[id]) and m.done and m.done[id] then names[#names + 1] = key end
@@ -1498,7 +1519,7 @@ local function BuildByQuest(out)
     table.sort(names)
     for _, name in ipairs(names) do
         local m = members[name]
-        table.insert(players, { name = name, color = NameColor(name), quests = m.quests,
+        table.insert(players, { name = name, color = NameColor(name), quests = Visible(m),
             isDone = function(id) return m.done and m.done[id] end })
     end
     if #names == 0 then return end
@@ -1512,6 +1533,63 @@ local function BuildByQuest(out)
     end
     table.sort(ids, function(a, b) return title[a] < title[b] end)
 
+    -- Order by quest chain: a quest sits under the nearest earlier quest of the chain that is also in this list
+    -- (via QuestieDB's prerequisites), so a chain reads top to bottom, each step indented under the one before.
+    local depth = {}
+    do
+        local inSet = {}
+        for _, id in ipairs(ids) do inSet[id] = true end
+        local lib = _G.LibQuestieDB
+        local function Pre(id)
+            local out = {}
+            if not (lib and lib.Quest and lib.Quest.Get) then return out end
+            for _, f in ipairs({ "preQuestSingle", "preQuestGroup", "parentQuest" }) do
+                local ok, v = pcall(lib.Quest.Get, id, f)
+                if ok then
+                    if type(v) == "number" and v > 0 then out[#out + 1] = v
+                    elseif type(v) == "table" then
+                        for _, x in ipairs(v) do if type(x) == "number" and x > 0 then out[#out + 1] = x end end
+                    end
+                end
+            end
+            return out
+        end
+        local parent = {}
+        for _, id in ipairs(ids) do
+            local frontier, visited = { id }, { [id] = true }
+            for _ = 1, 8 do
+                local nxt = {}
+                for _, cur in ipairs(frontier) do
+                    for _, p in ipairs(Pre(cur)) do
+                        if not visited[p] then
+                            visited[p] = true
+                            if inSet[p] and not parent[id] then parent[id] = p end
+                            nxt[#nxt + 1] = p
+                        end
+                    end
+                end
+                if parent[id] or #nxt == 0 then break end
+                frontier = nxt
+            end
+        end
+        local kids = {}
+        for _, id in ipairs(ids) do
+            local p = parent[id]
+            if p then kids[p] = kids[p] or {}; table.insert(kids[p], id) end
+        end
+        local ordered, placed = {}, {}
+        local function Walk(id, d)
+            if placed[id] then return end
+            placed[id] = true
+            depth[id] = d
+            ordered[#ordered + 1] = id
+            for _, k in ipairs(kids[id] or {}) do Walk(k, math.min(d + 1, 6)) end
+        end
+        for _, id in ipairs(ids) do if not parent[id] then Walk(id, 0) end end
+        for _, id in ipairs(ids) do Walk(id, 0) end   -- (anything left over, e.g. a prerequisite loop)
+        ids = ordered
+    end
+
     local missing = {}
     for name in pairs(GroupNames()) do if not FindMember(name, true) then table.insert(missing, name) end end
     table.sort(missing)
@@ -1522,15 +1600,16 @@ local function BuildByQuest(out)
     if #ids == 0 then table.insert(out, { "|cff808080(nobody has any quests)|r", 0, 8 }) end
 
     for _, id in ipairs(ids) do
-        table.insert(out, { "|cffffd200" .. title[id] .. "|r" .. FinishedBadge(id), 0, 10, myQuests[id] and id or nil,
-            guide = (not myQuests[id]) and id or nil })
+        local d = depth[id] or 0
+        table.insert(out, { (d > 0 and "|cff808080\226\134\179|r " or "") .. "|cffffd200" .. title[id] .. "|r" .. FinishedBadge(id),
+            d * 14, d > 0 and 5 or 10, myQuests[id] and id or nil, guide = (not myQuests[id]) and id or nil })
         for _, p in ipairs(players) do
-            if p.name ~= "You" then   -- you're already in your own quest log; only show teammates
-                local q = p.quests[id]
-                local status = q and Summary(q) or (p.isDone(id) and "|cff40c0ffalready completed|r") or "|cff808080not started|r"
-                local pm = members[p.name]
-                table.insert(out, { p.color .. p.name .. "|r" .. (pm.ghost and " |cff808080(offline)|r" or VerTag(pm.version)) .. ": " .. status, 14, 1 })
-            end
+            local q = p.quests[id]
+            local status = q and Summary(q) or (p.isDone(id) and "|cff40c0ffalready completed|r") or "|cff808080not started|r"
+            local pm = members[p.name]   -- nil for you
+            local tag = pm and (pm.ghost and " |cff808080(offline)|r" or VerTag(pm.version)) or ""
+            table.insert(out, { p.color .. p.name .. "|r" .. tag .. ": " .. status, 14 + d * 14, 1,
+                follow = (pm and not pm.ghost) and p.name or nil })
         end
     end
 end
@@ -1545,7 +1624,7 @@ local function BuildByPlayer(out)
         local m = members[name]
         table.insert(out, { NameColor(name) .. name .. "|r" .. (m.ghost and GhostTag(m) or VerTag(m.version)),
             0, #out > 0 and 14 or 0, follow = (not m.ghost) and name or nil })
-        local list = SortedQuests(m.quests)
+        local list = SortedQuests(Visible(m))
         if #list == 0 then table.insert(out, { "|cff808080(no quests)|r", 12, 2 }) end
         for _, e in ipairs(list) do
             local q = e.q
@@ -1603,7 +1682,7 @@ local function BuildCompare(out)
     if #names == 0 then return end
     for _, name in ipairs(names) do
         local m = members[name]
-        table.insert(players, { name = name, color = NameColor(name), quests = m.quests, version = m.version, ghost = m.ghost,
+        table.insert(players, { name = name, color = NameColor(name), quests = Visible(m), version = m.version, ghost = m.ghost,
             isDone = function(id) return m.done and m.done[id] end })
     end
     local n = #players
@@ -1693,7 +1772,7 @@ local function BuildPlan(out)
     local players = { { me = true, quests = myQuests, isDone = Completed } }
     for _, name in ipairs(names) do
         local m = members[name]
-        table.insert(players, { name = name, m = m, quests = m.quests, ghost = m.ghost,
+        table.insert(players, { name = name, m = m, quests = Visible(m), ghost = m.ghost,
             isDone = function(id) return m.done and m.done[id] end })
     end
     -- your own character name (in your class colour) is used wherever the plan refers to you
@@ -1722,7 +1801,7 @@ local function BuildPlan(out)
     -- Quests a teammate has finished that I haven't, even if nobody has them in their log now
     -- (known from the "finished" reports, which cover every quest seen in the group and the quests before them).
     for id in pairs(seen) do
-        if not title[id] and not Completed(id) then
+        if not title[id] and not Completed(id) and not ClassLocked(id) then
             local doneByMate = false
             for _, p in ipairs(players) do
                 if not p.me and p.isDone(id) then doneByMate = true end
@@ -2059,7 +2138,7 @@ local function AddProgress(tt, name)
     local low = name:lower()
     local added = false
     for who, m in pairs(members) do
-        for _, q in pairs(m.ghost and {} or m.quests) do   -- (offline teammates' old progress isn't shown on tooltips)
+        for _, q in pairs(m.ghost and {} or Visible(m)) do   -- (offline teammates' old progress isn't shown on tooltips)
             if q.state ~= 1 then
                 for _, o in ipairs(q.objs) do
                     if o[1]:lower():find(low, 1, true) then
@@ -2143,7 +2222,7 @@ ns:RegisterOption({
     key = "questShareRemember",
     type = "toggle",
     label = "Remember teammates' quests when they're offline",
-    tooltip = "Saves each teammate's quests as they play. When they're offline or not in your group, their last known quests still show in the teammates' quests window (tagged \"last known 2 h ago\") so you can catch up on what they've done. Kept for 30 days. Turning this off deletes the saved copies.",
+    tooltip = "Saves each teammate's quests as they play. When a teammate who is still in your group goes offline, their last known quests still show in the teammates' quests window (tagged \"last known 2 h ago\"). People who have left the group are not shown. Kept for 30 days. Turning this off deletes the saved copies.",
     default = true,
     onChange = function(on)
         if on then
@@ -2173,7 +2252,7 @@ end)
 function ns.QuestHints(includeHas)
     local byId = {}
     local function Note(id, field, who, title)
-        if myQuests[id] or Completed(id) then return end
+        if myQuests[id] or Completed(id) or ClassLocked(id) then return end
         local h = byId[id]
         if not h then h = { id = id, done = {}, has = {} }; byId[id] = h end
         h[field][#h[field] + 1] = who

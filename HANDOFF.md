@@ -1,6 +1,6 @@
 # P13Tweaks – Handoff (2026-11-17)
 
-## Handover summary (v0.13.4 - docs only change on top of v0.13.3)
+## Handover summary (v0.14.3; newest changes are the last bullets of this file, v0.13.5 ... v0.14.3, all untested in game)
 **NOTHING from v0.2.0 onward has been run in the game** (no Lua interpreter on this PC; every file was only read back, never executed). Expect load errors on first `/reload`:
 turn on `/console scriptErrors 1` and fix what the popups say. Several new files need a full game restart (they were added to the .tocs): MapDraw, MapQuestHints, FollowClick,
 TaggedMarks, QuestWhere, Version.lua. Version is kept in THREE places and bumped every update: `Version.lua`, and `## Version:` in both .tocs.
@@ -404,3 +404,13 @@ quest enemy arrow, free keys, Zephras terrain, flight master map icons). Commit/
   point), and MapQuestHints collapses the points on the shown map to ONE marker at the middle of the busiest cluster (within 6 % of the map). `ns.QuestFinisherPoints` is still the fallback.
 - **v0.13.3**: the gold "?" for my quests a teammate finished moves to the HAND-IN point once I've finished the quest's objectives (`q.state == 1` -> hint `.ready`, uses
   `ns.QuestFinisherPoints`; otherwise still the work area via `QuestObjectivePoints` with the cluster collapse). Tooltip says which. `convCache` keys carry the ready flag.
+- **v0.13.5** (QuestShare): other classes' class quests are hidden from every teammate view, tooltips, "finished by" and map hints unless I can take them too (`ClassLocked(id)` /
+  `Visible(m)`, from QuestieDB `requiredClasses`; no QuestieDB = nothing hidden).
+- **v0.13.6**: "By quest" is ordered by quest chain: each quest is nested under the nearest listed prerequisite (`preQuestSingle/Group/parentQuest`, up to 8 steps back), indented with an arrow.
+- **v0.13.7 / 0.13.9**: "By quest" teammate lines are Shift-click-follow targets; my own line ("You") is now listed under each quest.
+- **v0.13.8** (FollowClick): world Shift-click no longer uses a SHIFT-BUTTON1 override binding (never fired on the 3D world); it hooks WorldFrame OnMouseDown/OnMouseUp and calls
+  `FollowUnit(name)` (drag > 8 px = camera turn, ignored). UNTESTED - `FollowUnit` may be protected on this client.
+- **v0.13.10**: `SyncGhosts` only shows saved ("last known") teammates who are still in the group (offline members); anyone who left is not shown. Saved data is kept on disk.
+- **v0.14.0-0.14.3 BagMiddleSort** (new file, in both .tocs; option `bagMiddleSort`, Towns > Bags): middle-click a bag slot sorts. Slot hooks (OnMouseDown/Up) + a GLOBAL_MOUSE_UP
+  fallback; default bags use `C_Container.SortBags`/`SortBags`; Bagnon/BagBrother frames (have `SortItems`, `IsCached`) call their own `SortItems()` (the cleanup button action).
+  `/p13 bagdebug` shows what the mouse is over. UNTESTED in game; needs a full restart (new file).

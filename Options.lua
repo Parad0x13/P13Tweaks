@@ -31,6 +31,7 @@ local LAYOUT = {
     { name = "Towns", icon = "Interface\\Icons\\INV_Misc_Bag_10", sections = {
         { "Townsfolk", { "minimapTownsfolk", "worldmapTownsfolk" } },
         { "Portrait menu", { "classTrainerMenu" } },
+        { "Bags", { "bagMiddleSort" } },
     } },
     { name = "Professions", icon = "Interface\\Icons\\INV_Pick_02", sections = {
         { "Skill", { "profCap" } },

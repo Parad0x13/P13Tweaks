@@ -2,7 +2,7 @@
 ## Title: P13Tweaks
 ## Notes: Personal quality-of-life tweaks. Type /p13 to open options.
 ## Author: bryan
-## Version: 0.13.4
+## Version: 0.14.3
 ## SavedVariables: P13TweaksDB
 ## OptionalDeps: QuestieDB
 
@@ -14,6 +14,7 @@ Features\MapTerrainData.lua
 Features\MapTerrain.lua
 Features\MapMemory.lua
 Features\MapMiddleClick.lua
+Features\BagMiddleSort.lua
 Features\MapCenterKey.lua
 Features\InteractIcons.lua
 Features\RangeBeep.lua

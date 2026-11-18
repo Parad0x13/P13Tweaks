@@ -26,24 +26,32 @@ end
 local pending = false
 
 -- Shift + left-click on a player standing in the world (the 3D character). A click on the world isn't a click on a
--- frame, so this uses a key binding instead: Shift+left-click is bound to a hidden secure button whose macro follows
--- whoever the mouse is over, if they're friendly. (It replaces the game's default Shift+click in the world, which
--- does nothing special; clicks on windows and unit frames are unaffected.)
-local WORLD_MACRO = "/follow [@mouseover,help,nodead] mouseover"
-local worldBtn
+-- frame, so the world frame's mouse events are watched instead (see below).
+-- (The game handles plain clicks on the 3D world itself, so a key binding on Shift+left-click never fires there.
+-- Instead the world frame's mouse events are watched: on a Shift+left press over a friendly player, remember who;
+-- on release, follow them - unless the mouse was dragged to turn the camera.)
+local worldHooked, pressed, px, py = false, nil, 0, 0
 
 local function SetupWorld()
-    if not worldBtn then
-        worldBtn = CreateFrame("Button", "P13TweaksFollowWorld", UIParent, "SecureActionButtonTemplate")
-        worldBtn:RegisterForClicks("AnyUp")
-        worldBtn:SetAttribute("type", "macro")
-        worldBtn:SetAttribute("macrotext", WORLD_MACRO)
-    end
-    if On() and ns:Get("followClickWorld") then
-        SetOverrideBindingClick(worldBtn, true, "SHIFT-BUTTON1", "P13TweaksFollowWorld", "LeftButton")
-    else
-        ClearOverrideBindings(worldBtn)
-    end
+    if worldHooked or not _G.WorldFrame then return end
+    worldHooked = true
+    WorldFrame:HookScript("OnMouseDown", function(_, button)
+        pressed = nil
+        if button ~= "LeftButton" or not IsShiftKeyDown() or not (On() and ns:Get("followClickWorld")) then return end
+        if UnitExists("mouseover") and UnitIsPlayer("mouseover") and not UnitIsUnit("mouseover", "player")
+            and UnitIsFriend("player", "mouseover") and not UnitIsDeadOrGhost("mouseover") then
+            pressed = GetUnitName("mouseover", true)
+            px, py = GetCursorPosition()
+        end
+    end)
+    WorldFrame:HookScript("OnMouseUp", function(_, button)
+        local who = pressed
+        pressed = nil
+        if button ~= "LeftButton" or not who then return end
+        local x, y = GetCursorPosition()
+        if math.abs(x - px) + math.abs(y - py) > 8 then return end   -- dragged: that was a camera turn
+        pcall(FollowUnit, who)
+    end)
 end
 
 local function Apply()
@@ -77,7 +85,7 @@ ns:RegisterOption({
     key = "followClickWorld",
     type = "toggle",
     label = "...and Shift-click a player in the world to follow them",
-    tooltip = "Hold Shift and left-click another player's character (standing in the game world) to follow them. Uses a Shift + left-click key binding, which replaces the game's default for that click (it does nothing special by default). Clicks on windows and unit frames are not affected.",
+    tooltip = "Hold Shift and left-click another player's character (standing in the game world) to follow them. Dragging to turn the camera doesn't count. Clicks on windows and unit frames are not affected.",
     default = true,
     onChange = function() Apply() end,
 })
@@ -90,7 +98,7 @@ ns:RegisterCommand("followdebug", "show which unit frames Shift-click-follow fou
         ns:Print(("frame %s: %s"):format(tostring(f.GetName and f:GetName() or "?"), (ok and mt) and "Shift-click follow set" or "NOT set"))
     end
     if n == 0 then ns:Print("No party / raid / target frames found.") end
-    ns:Print("Shift+left-click binding currently points to: " .. tostring(GetBindingAction and GetBindingAction("SHIFT-BUTTON1", true) or "?"))
+    ns:Print("World Shift-click follow hooked: " .. tostring(worldHooked))
 end)
 
 local events = CreateFrame("Frame")
