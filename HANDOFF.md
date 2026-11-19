@@ -33,6 +33,19 @@ Personal quality-of-life addon for **WoW Forever** (`P13Tweaks.toc`, interface 1
   tested in game** except where the user reported results.
 - Adding/removing a file in a `.toc` needs a **full game restart**; other changes need only `/reload`.
 
+## v0.15.0-0.15.3 – FishSession (untested in game; new file in both .tocs, needs a full restart)
+- **OPEN ISSUE (handover)**: the popup did not appear on a real catch in 0.15.0/0.15.1; with 0.15.1 `/p13 fishsession debug` showed
+  "slot cleared ... (not an item we saw)" (slots snapshot was empty). 0.15.2 snapshots at LOOT_READY and LOOT_OPENED and keeps a sticky
+  `fishingLoot` flag until LOOT_CLOSED - NOT yet confirmed in game. Next step: user runs `/p13 fishsession debug` + a catch and reports the printed lines
+  (fishing loot flag, slots in window, items remembered). If still empty, consider CHAT_MSG_LOOT as a fallback or GetLootSlotInfo link differences.
+- v0.15.3: money shown as "1g 2s 33c" (coloured, zero parts dropped) and a "Per hour" line (shows "..." for the first minute).
+- v0.15.1: 0.15.0 showed nothing in game, so detection now snapshots the loot slots at LOOT_OPENED (`IsFishingLoot()`) and counts a slot on LOOT_SLOT_CLEARED
+  (no chat parsing). `/p13 fishsession test` shows a fake catch; `/p13 fishsession debug` prints what the events see.
+- `Features/FishSession.lua`: popup on the first fishing catch:
+  time since the cast that led to the catch, items caught, and worth = TSM `DBRegionSaleAvg` x count via `TSM_API` (optional dep `TradeSkillMaster`).
+  Hover = item list. Closing the window (OnHide) ends the session; the next catch starts a new one. Option `fishSession` in /p13 > Professions > Fishing.
+  Coin from fishing is ignored. Items with no TSM price are counted as "N without a price".
+
 ## 2026-11-17 – untested in game (all need a full restart: new file in the .toc)
 - **Options window redesign** (`Options.lua`): tabbed sidebar + section headings, dark flat look.
   Tab icons are unverified on Forever (a missing one shows blank/green).

@@ -36,7 +36,7 @@ local LAYOUT = {
     { name = "Professions", icon = "Interface\\Icons\\INV_Pick_02", sections = {
         { "Skill", { "profCap" } },
         { "Gathering", { "interactIcons" } },
-        { "Fishing", { "fishKeyOn", "fishLoud" } },
+        { "Fishing", { "fishKeyOn", "fishLoud", "fishSession" } },
     } },
     { name = "Chat & keys", icon = "Interface\\Icons\\INV_Letter_15", sections = {
         { "Chat", { "chatFade", "chatFadeShowNew", "chatScrollOne" } },
