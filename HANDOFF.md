@@ -33,6 +33,18 @@ Personal quality-of-life addon for **WoW Forever** (`P13Tweaks.toc`, interface 1
   tested in game** except where the user reported results.
 - Adding/removing a file in a `.toc` needs a **full game restart**; other changes need only `/reload`.
 
+## v0.16.0-0.17.1 (2026-11-19) - cooking profit (built, then REMOVED) + VendorSellAll
+- **Current version 0.17.1. Needs a full game restart** (.toc list changed: CookingProfit.lua removed, VendorSellAll.lua added).
+- **VendorSellAll** (`Features/VendorSellAll.lua`, option `vendorSellAll`, /p13 > Towns > Vendor): with a vendor window open, Ctrl + right-click a bag item sells every other
+  stack of that itemID (<= 12 stacks in total, the vendor Buyback size), 0.08 s apart, via `GLOBAL_MOUSE_DOWN` + `C_Container.UseContainerItem`; the clicked stack is sold by the
+  game's own right-click. Bag/slot of the button found via GetBagID/GetBag/parent ID. UNTESTED in game (bag addons like Bagnon may not expose bag/slot).
+- **Cooking profit was built and then removed on request** (user moved it into TSM): v0.16.x scanned the Cooking window, listed recipes by vendor-sell minus ingredient cost, showed unlearned
+  recipes with skill requirement. Findings worth keeping about THIS client (WoW Forever): it uses the MODERN profession API - no `TRADE_SKILL_UPDATE` event, no `GetNumTradeSkills`/`GetItemInfo`
+  globals (use `C_Item.GetItemInfo`); recipes come from `C_TradeSkillUI.GetAllRecipeIDs/GetRecipeInfo/GetRecipeSchematic(id,false)` (`reagentSlotSchematics`, reagentType 1 = required);
+  unlearned recipes are included (`info.learned == false`); `C_TooltipInfo.GetRecipeResultItem(id).lines` has "Requires Cooking (300)"; the profession frame is `ProfessionsFrame`.
+  A new CreateFrame frame starts SHOWN (toggle bug). The file was deleted; saved keys cookRecipes/cookDebug/cookingProfit are cleared in Core.lua.
+- Debug trick that worked: write diagnostic lines into `P13TweaksDB.<x>` then `/reload` and read `WTF/Account/*/SavedVariables/P13Tweaks.lua` (user cannot copy text out of chat).
+
 ## v0.15.0-0.15.3 – FishSession (untested in game; new file in both .tocs, needs a full restart)
 - **OPEN ISSUE (handover)**: the popup did not appear on a real catch in 0.15.0/0.15.1; with 0.15.1 `/p13 fishsession debug` showed
   "slot cleared ... (not an item we saw)" (slots snapshot was empty). 0.15.2 snapshots at LOOT_READY and LOOT_OPENED and keeps a sticky

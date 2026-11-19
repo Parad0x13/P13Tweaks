@@ -60,6 +60,7 @@ events:SetScript("OnEvent", function(self, event, arg1)
         P13TweaksDB.mapOverlay, P13TweaksDB.mapOverlayAlpha, P13TweaksDB.mapOverlayAlpha20 = nil, nil, nil
         P13TweaksDB.mapOverlaySavedFade = nil
         P13TweaksDB.fishMap, P13TweaksDB.fishMapView, P13TweaksDB.fishLog = nil, nil, nil  -- removed fishing map
+        P13TweaksDB.cookingProfit, P13TweaksDB.cookRecipes, P13TweaksDB.cookDebug = nil, nil, nil  -- removed cooking profit (moved to TSM)
         for _, def in ipairs(ns.options) do
             if P13TweaksDB[def.key] == nil then
                 P13TweaksDB[def.key] = def.default

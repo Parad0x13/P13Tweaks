@@ -32,6 +32,7 @@ local LAYOUT = {
         { "Townsfolk", { "minimapTownsfolk", "worldmapTownsfolk" } },
         { "Portrait menu", { "classTrainerMenu" } },
         { "Bags", { "bagMiddleSort" } },
+        { "Vendor", { "vendorSellAll" } },
     } },
     { name = "Professions", icon = "Interface\\Icons\\INV_Pick_02", sections = {
         { "Skill", { "profCap" } },
