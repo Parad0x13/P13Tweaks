@@ -1,4 +1,4 @@
--- P13Tweaks feature: a round "P13" button on the minimap.
+-- P13Tweaks feature: a round button on the minimap, showing the P13 glider-grid logo.
 -- Left-click opens the options, right-click opens the teammates' quests window.
 -- Drag it to move it around the edge of the minimap (the spot is remembered).
 local ADDON_NAME, ns = ...
@@ -39,12 +39,13 @@ local function Build()
     -- same geometry the standard minimap buttons use: the ring art's hole sits at the top-left
     bg:SetSize(20, 20)
     bg:SetPoint("TOPLEFT", 7, -5)
-    bg:SetVertexColor(0.05, 0.12, 0.09, 1)
+    bg:SetVertexColor(0.051, 0.067, 0.09, 1)   -- #0d1117, the logo's background
 
-    local label = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    label:SetPoint("CENTER", bg, "CENTER", 0, 0)
-    label:SetText("P13")
-    label:SetTextColor(0.2, 1, 0.6)
+    -- the Parad0x13 glider grid (Media/P13Icon.tga, made by tools/make_icon.py)
+    local icon = btn:CreateTexture(nil, "ARTWORK")
+    icon:SetTexture("Interface\\AddOns\\P13Tweaks\\Media\\P13Icon.tga")
+    icon:SetSize(15, 15)               -- 75% of the 20x20 disc
+    icon:SetPoint("CENTER", bg, "CENTER", 0, 0)
 
     local border = btn:CreateTexture(nil, "OVERLAY")
     border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
