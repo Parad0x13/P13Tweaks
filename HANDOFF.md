@@ -18,6 +18,13 @@ TaggedMarks, QuestWhere, Version.lua. Version is kept in THREE places and bumped
 - **First things to check next session**: (1) any Lua error popups; (2) `/p13 questsdebug` counters while two clients are grouped (are hellos / full lists repeating?);
   (3) does "Synced" appear; (4) map markers (needs QuestieDB); (5) `/p13 followdebug`; (6) nameplates on for TaggedMarks.
 
+## v0.20.0 (2026-11-20) - hunter low-ammo warning (untested in game; new file in both .tocs, needs a FULL restart)
+- `Features/AmmoWarn.lua`, option `ammoWarn` + `ammoWarnLow` (toggleNumber, default on, threshold default 100), /p13 > Combat > Spells.
+- Hunters only. Reads ammo slot 0 (`GetInventoryItemID/Count("player", 0)`); only warns if a bow/crossbow/gun is equipped in slot 18 (item class 2, subclass 2/18 = arrows, 3 = bullets). Clients without an ammo slot (MoP) never warn.
+- Checks on `PLAYER_ENTERING_WORLD` and `UNIT_INVENTORY_CHANGED` (player). State machine ok/low/out: warns once when crossing to low, again at out; resets when back above the threshold. Warning = chat line + `UIErrorsFrame` text + raid-warning sound.
+- `Version.lua` was out of sync (0.19.4 vs .toc 0.19.5); all three now 0.20.0.
+- If it never warns: check script errors, `/dump GetInventoryItemID("player",0)`, and whether ammo count changes fire `UNIT_INVENTORY_CHANGED` on Forever (else add `BAG_UPDATE_DELAYED`).
+
 ## v0.19.5 (2026-11-20) - map drawing fade now OFF by default
 - `mapDrawFade` default changed true -> false in `Features/MapDraw.lua` (lines stay until Clear mine / `/p13 mapdraw clear` / reload). Saved values are kept, so existing users may still have fading on. Untested in game.
 - OPEN, unresolved: user reports map lines "draw themselves again" after being removed. Read all of MapDraw.lua and found no path that re-adds a removed line. Candidate causes: (1) Clear all (`A`) doesn't stop a teammate's queued stroke pieces / pending 3 s resend arriving afterwards; (2) pressing Clear mine while a stroke is still being drawn (`current` is no longer in `strokes` but still gets sent by EndStroke); (3) not MapDraw (demo lines, second client of same character, other addon). Asked the user how they remove lines, solo vs group, and whose colour; `/p13 mapdraw debug` after it recurs shows stroke count. No code changed for this.
