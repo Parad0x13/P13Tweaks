@@ -4,7 +4,7 @@
 -- buttons appear in the map's button row while you have lines.
 -- Each finished stroke is sent to the group over the hidden addon channel; teammates who also run
 -- P13Tweaks see it on their own map, in the sender's class colour. Lines are stored as positions on the
--- map picture (0..1), so they stay put when you zoom or pan. Lines fade after a few minutes (an option).
+-- map picture (0..1), so they stay put when you zoom or pan. Lines can fade after a few minutes (an option, off by default).
 --
 -- Messages (prefix "P13M", fields split by "^"):
 --   S^<mapID>^<strokeID>^<part>^<parts>^<RRGGBB>^<points>   one stroke, in pieces of <= 50 points;
@@ -484,7 +484,7 @@ ns:RegisterOption({
     numberKey = "mapDrawFadeMinutes",
     numberDefault = 5,
     tooltip = "Lines on the map (yours and your teammates') fade out and disappear after this many minutes. Turn it off to keep them until you press Clear mine, type /p13 mapdraw clear or reload.",
-    default = true,
+    default = false,
     onChange = function() Changed() end,
 })
 
