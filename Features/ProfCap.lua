@@ -483,6 +483,11 @@ local function GuideToVendor()
     GuideTo({ name = "Vendor", skillLine = "VENDOR" })
 end
 
+-- Nearest banker (NPC flag or title).
+local function GuideToBank()
+    GuideTo({ name = "Bank", skillLine = "BANK" })
+end
+
 -- Nearest auctioneer (by NPC flag or title) = nearest auction house.
 local function GuideToAuctionHouse()
     GuideTo({ name = "Auction House", skillLine = "AUCTION" })
@@ -541,8 +546,9 @@ if Menu and Menu.ModifyMenu then
         root:CreateDivider()
         root:CreateButton("Mark closest Class Trainer", GuideToClassTrainer)
         root:CreateButton("Mark closest Vendor (to sell)", GuideToVendor)
-        root:CreateButton("Mark closest Mailbox", GuideToMailbox)
-        root:CreateButton("Mark closest Auction House", GuideToAuctionHouse)
+        root:CreateButton("|TInterface\\Icons\\INV_Letter_15:14:14:0:0|t Mark closest Mailbox", GuideToMailbox)
+        root:CreateButton("|TInterface\\Minimap\\Tracking\\Auctioneer:14:14:0:0|t Mark closest Auction House", GuideToAuctionHouse)
+        root:CreateButton("|TInterface\\Minimap\\Tracking\\Banker:14:14:0:0|t Mark closest Bank", GuideToBank)
         if HAS_WEAPON_SKILLS then
             -- Submenu: one entry per weapon; ones you already know are greyed and marked.
             local sub = root:CreateButton("Mark closest Weapon Master")
@@ -585,7 +591,7 @@ ns:RegisterOption({
     key = "classTrainerMenu",
     type = "toggle",
     label = "\"Mark closest Trainer\" items when right-clicking your portrait",
-    tooltip = "Adds \"Mark closest Class Trainer\", \"Mark closest Vendor (to sell)\" (nearest NPC who buys your items), \"Mark closest Mailbox\", \"Mark closest Auction House\", \"Mark closest Weapon Master\" (with a choice of weapon; only in games that still have weapon skills) and a \"Mark closest Profession Trainer\" submenu listing every profession (ones you haven't learned are greyed, but still work) to the menu you get by right-clicking your own portrait. Each puts a waypoint on the nearest matching trainer (needs QuestieDB). For a profession it looks for a trainer who teaches your next rank.",
+    tooltip = "Adds \"Mark closest Class Trainer\", \"Mark closest Vendor (to sell)\" (nearest NPC who buys your items), \"Mark closest Mailbox\", \"Mark closest Auction House\", \"Mark closest Bank\", \"Mark closest Weapon Master\" (with a choice of weapon; only in games that still have weapon skills) and a \"Mark closest Profession Trainer\" submenu listing every profession (ones you haven't learned are greyed, but still work) to the menu you get by right-clicking your own portrait. Each puts a waypoint on the nearest matching trainer (needs QuestieDB). For a profession it looks for a trainer who teaches your next rank.",
     default = true,
 })
 
@@ -594,7 +600,8 @@ ns:RegisterCommand("goods", "waypoint to the nearest General Goods vendor", Guid
 ns:RegisterCommand("repair", "waypoint to the nearest NPC who repairs gear (anvil)", GuideToRepair)
 ns:RegisterCommand("sell", "waypoint to the nearest vendor, to sell your stuff", GuideToVendor)
 ns:RegisterCommand("mail", "waypoint to the nearest mailbox", GuideToMailbox)
-ns:RegisterCommand("ah", "waypoint to the nearest auction house (auctioneer)", GuideToAuctionHouse)
+ns:RegisterCommand("bank", "waypoint to the nearest banker", GuideToBank)
+ns:RegisterCommand("ah","waypoint to the nearest auction house (auctioneer)", GuideToAuctionHouse)
 ns:RegisterCommand("weapon","waypoint to the nearest weapon master; /p13 weapon <weapon> (e.g. daggers, 2h swords) = nearest one who teaches it", function(arg)
     arg = strtrim(arg or ""):lower():gsub("^1h ", "one-handed "):gsub("^2h ", "two-handed ")
     if arg == "" then GuideToWeaponMaster(); return end

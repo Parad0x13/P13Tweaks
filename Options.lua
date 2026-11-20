@@ -21,7 +21,7 @@ local LAYOUT = {
         { "Aggro range", { "aggroRange", "aggroBeep" } },
         { "Target range", { "rangeBeep", "rangeDot" } },
         { "Levelling", { "killsToLevel", "killTally" } },
-        { "Spells", { "spellReady" } },
+        { "Spells", { "spellReady", "skillLog", "skillBeacon" } },
         { "Group", { "taggedMarks" } },
     } },
     { name = "Quests", icon = "Interface\\Icons\\INV_Scroll_03", sections = {
@@ -36,6 +36,7 @@ local LAYOUT = {
     } },
     { name = "Professions", icon = "Interface\\Icons\\INV_Pick_02", sections = {
         { "Skill", { "profCap" } },
+        { "Crafting", { "craftTime" } },
         { "Gathering", { "interactIcons" } },
         { "Fishing", { "fishKeyOn", "fishLoud", "fishSession" } },
     } },

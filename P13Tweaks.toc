@@ -2,7 +2,7 @@
 ## Title: P13Tweaks
 ## Notes: Personal quality-of-life tweaks. Type /p13 to open options.
 ## Author: bryan
-## Version: 0.17.1
+## Version: 0.19.4
 ## SavedVariables: P13TweaksDB
 ## OptionalDeps: QuestieDB, TradeSkillMaster
 
@@ -32,11 +32,13 @@ Features\KillsToLevel.lua
 Features\ChatFade.lua
 Features\ChatScroll.lua
 Features\SpellReady.lua
+Features\SkillLog.lua
 Features\TaggedMarks.lua
 Features\QuestShare.lua
 Features\QuestWhere.lua
 Features\FollowClick.lua
 Features\QuestMobArrow.lua
+Features\CraftTime.lua
 Features\FreeKeys.lua
 Features\MinimapButton.lua
 Options.lua

@@ -18,6 +18,22 @@ TaggedMarks, QuestWhere, Version.lua. Version is kept in THREE places and bumped
 - **First things to check next session**: (1) any Lua error popups; (2) `/p13 questsdebug` counters while two clients are grouped (are hellos / full lists repeating?);
   (3) does "Synced" appear; (4) map markers (needs QuestieDB); (5) `/p13 followdebug`; (6) nameplates on for TaggedMarks.
 
+## v0.19.0 - v0.19.4 (2026-11-19) - SkillLog + portrait menu icons (SkillLog ran once in game: one bug found and fixed)
+- `Features/SkillLog.lua` (new file in both .tocs, needs a FULL restart). Options `skillLog` (toggleText, names default "Sinister Strike") and `skillBeacon` (off by default), in /p13 > Combat > Spells.
+  `UNIT_SPELLCAST_SUCCEEDED` for "player" -> `P13TweaksDB.skillCounts[name]` + `P13TweaksDB.skillHistory` (last 500 `{time, name}`; written to SavedVariables only on /reload or logout).
+  Beacon = 8x8 square at screen top-left, colour = total casts as RGB (r*65536+g*256+b), for an external program that samples that pixel (windowed/borderless only; read-only, no input to the game).
+  `/p13 skills` prints totals. Sinister Strike has no cooldown (only GCD), so it logs casts, not "off cooldown".
+- v0.19.1 fix: option key `skillLog` is the toggle (a boolean in P13TweaksDB) - the cast list had the same key and crashed `table.insert`; renamed to `skillHistory`. Lesson: option keys share P13TweaksDB with any data tables.
+- v0.19.2-0.19.4 (`Features/ProfCap.lua`): portrait right-click menu got "Mark closest Bank" (`GuideToBank`, skillLine "BANK", `/p13 bank`) and icons on Auction House, Bank (minimap tracking textures) and Mailbox (`INV_Letter_15`). Untested in game; if an icon is missing use the fallbacks in MinimapTownsfolk.lua.
+- Ideas raised, not built: per-character completed-quest recorder for "did any alt do quest X" (check `/dump C_QuestLog.IsQuestFlaggedCompletedOnAccount` on Forever first - unknown if it exists).
+
+## v0.18.0 (2026-11-19) - CraftTime (untested in game; new file in both .tocs, needs a FULL restart)
+- `Features/CraftTime.lua`, option `craftTime` (/p13 > Professions > Crafting): hovering the profession window's **Create All** button adds
+  "N crafts x X sec = total" to the tooltip. N = `CraftingPage:GetCraftableCount()` (fallback `numAvailable`), X = recipe spell `castTime` via `C_Spell.GetSpellInfo`.
+  Hooks `ProfessionsFrame.CraftingPage.CreateAllButton` after `Blizzard_Professions` loads (ADDON_LOADED / TRADE_SKILL_SHOW). No line if no cast time is reported.
+- Assumes the field names above (Blizzard retail-style frame, which Forever uses per the cooking notes). If no line appears: check script errors, `/dump ProfessionsFrame.CraftingPage.CreateAllButton`.
+- Committed together with the v0.19.x work. Trad0x work from the same session is described in Trad0x\HANDOFF.md (session 11).
+
 ## What this is
 Personal quality-of-life addon for **WoW Forever** (`P13Tweaks.toc`, interface 16001) and
 **MoP Classic** (`P13Tweaks_Mists.toc`). Type `/p13` for the options window.
