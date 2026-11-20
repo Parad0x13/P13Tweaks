@@ -20,6 +20,7 @@ TaggedMarks, QuestWhere, Version.lua. Version is kept in THREE places and bumped
 
 ## v0.19.5 (2026-11-20) - map drawing fade now OFF by default
 - `mapDrawFade` default changed true -> false in `Features/MapDraw.lua` (lines stay until Clear mine / `/p13 mapdraw clear` / reload). Saved values are kept, so existing users may still have fading on. Untested in game.
+- OPEN, unresolved: user reports map lines "draw themselves again" after being removed. Read all of MapDraw.lua and found no path that re-adds a removed line. Candidate causes: (1) Clear all (`A`) doesn't stop a teammate's queued stroke pieces / pending 3 s resend arriving afterwards; (2) pressing Clear mine while a stroke is still being drawn (`current` is no longer in `strokes` but still gets sent by EndStroke); (3) not MapDraw (demo lines, second client of same character, other addon). Asked the user how they remove lines, solo vs group, and whose colour; `/p13 mapdraw debug` after it recurs shows stroke count. No code changed for this.
 - Not ours: a Questie taint error on `GetAuraDataByIndex` (Blizzard_MawBuffs via the objective tracker) was reported; fix is updating Questie or disabling its tracker.
 
 ## v0.19.0 - v0.19.4 (2026-11-19) - SkillLog + portrait menu icons (SkillLog ran once in game: one bug found and fixed)
