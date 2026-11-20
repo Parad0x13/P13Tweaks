@@ -18,6 +18,10 @@ TaggedMarks, QuestWhere, Version.lua. Version is kept in THREE places and bumped
 - **First things to check next session**: (1) any Lua error popups; (2) `/p13 questsdebug` counters while two clients are grouped (are hellos / full lists repeating?);
   (3) does "Synced" appear; (4) map markers (needs QuestieDB); (5) `/p13 followdebug`; (6) nameplates on for TaggedMarks.
 
+## v0.19.5 (2026-11-20) - map drawing fade now OFF by default
+- `mapDrawFade` default changed true -> false in `Features/MapDraw.lua` (lines stay until Clear mine / `/p13 mapdraw clear` / reload). Saved values are kept, so existing users may still have fading on. Untested in game.
+- Not ours: a Questie taint error on `GetAuraDataByIndex` (Blizzard_MawBuffs via the objective tracker) was reported; fix is updating Questie or disabling its tracker.
+
 ## v0.19.0 - v0.19.4 (2026-11-19) - SkillLog + portrait menu icons (SkillLog ran once in game: one bug found and fixed)
 - `Features/SkillLog.lua` (new file in both .tocs, needs a FULL restart). Options `skillLog` (toggleText, names default "Sinister Strike") and `skillBeacon` (off by default), in /p13 > Combat > Spells.
   `UNIT_SPELLCAST_SUCCEEDED` for "player" -> `P13TweaksDB.skillCounts[name]` + `P13TweaksDB.skillHistory` (last 500 `{time, name}`; written to SavedVariables only on /reload or logout).
@@ -327,7 +331,7 @@ quest enemy arrow, free keys, Zephras terrain, flight master map icons). Commit/
   (0..1 map coords) every >= 0.005 apart, max 300 points. Lines are drawn in a layer under `sc.Child` exactly like MapRoute (scaled 1/canvasScale,
   pooled `CreateLine`s, redrawn when `version`/map/scale changes). Sharing: prefix `P13M`, `S^map^id^part^parts^RRGGBB^points` (points = 4 chars each,
   two 12-bit base-64 numbers; 50 points per message; own token bucket 4 burst, 1 per 1.5 s), `U^id` undo, `X` clear. Strokes carry the sender's class colour.
-  Newcomers get my strokes resent (3 s after the roster changes); lines of people who leave are dropped. Options `mapDraw`, `mapDrawFade` (+ `mapDrawFadeMinutes`, default 5;
+  Newcomers get my strokes resent (3 s after the roster changes); lines of people who leave are dropped. Options `mapDraw`, `mapDrawFade` (+ `mapDrawFadeMinutes`, default 5; fade itself off by default since v0.19.5;
   last 30 s fade out). `/p13 mapdraw clear | demo` (demo = two pretend teammates' sine-wave lines on the open map). Untested in game.
   Note: normally LEFT-drag pans the map; while drawing it draws instead.
 - **v0.7.1**: sync plan "Can't be shared yet": under each blocked player's line, a clickable "-> find: <quest>" line for every quest they'd have to
