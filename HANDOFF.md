@@ -18,6 +18,51 @@ TaggedMarks, QuestWhere, Version.lua. Version is kept in THREE places and bumped
 - **First things to check next session**: (1) any Lua error popups; (2) `/p13 questsdebug` counters while two clients are grouped (are hellos / full lists repeating?);
   (3) does "Synced" appear; (4) map markers (needs QuestieDB); (5) `/p13 followdebug`; (6) nameplates on for TaggedMarks.
 
+## v0.27.0 (2026-11-21) - MAP REWORK: tile-map zoom/pan takes over the real world map
+**State when handed over**: the user tested most of this live and said the real-map zoom/pan is "significantly better" than at the start of the session. Still open: some Eastern Kingdoms terrain tiles look wrong,
+and the fly-to (middle-click centring, v0.27.0) was written last and NOT yet tried. New files in both .tocs: `Features/MapSheet.lua`, `Features/MapSheetZoom.lua` (a FULL game restart is needed once).
+Debug aid still on in the user's saved settings (`P13TweaksDB.mapDebug = true`): writes `mapDebugTrace` / `mapDebugLog` / `mapDebugTiles` to the SavedVariables file (read it from
+`.../_forever_/WTF/Account/<acct>/SavedVariables/P13Tweaks.lua`; the user `/reload`s to flush it). Turn it off with `/run P13TweaksDB.mapDebug = false`.
+
+**Why the rework**: the game's ScrollContainer fights any addon that moves the view. Traces showed it clamps the view to its own narrow limits (`sc.scrollXExtentsMin/Max`, `scrollYExtentsMin/Max`; at low zoom only about +-0.07 around the
+centre) and pulls it toward (0.5,0.5) EVERY frame in its own OnUpdate; its wheel handler also moves the view before an addon hook can run. Wrapping `CalculateScrollExtents*` did nothing (never called while zooming).
+Lesson learned the hard way: test switches set with `/run P13TweaksDB.xxx = true` PERSIST between sessions (`mapNoEdgeRoom` silently kept the whole edge-room fix off for several versions); MapSeamless now clears
+`mapNoEdgeRoom/mapNoSteer/mapNoHold` at login. Never leave a persistent test switch as the only way to disable something.
+
+**The design that works (MapSheetZoom.lua, option `mapSheetZoom`, default on)**: WE own the view. Our state (ownX/ownY/ownS = centre in 0-1 map coords + canvas scale) is written to the map EVERY frame in a
+`sc:HookScript("OnUpdate")` (hooks run AFTER the game's own update, so our write is what's drawn): scale via `sc:InstantPanAndZoom(s, x, y, true)` (only when it changed), position via
+`sc:SetNormalizedHorizontalScroll/VerticalScroll`, and `ns.WidenMapLimits` (MapSeamless `WidenLimits`: adds EDGE_ROOM = 0.5 to the game's limit fields right after the game recomputes them; it remembers what it wrote so it never adds twice).
+- Wheel: `sc:SetScript("OnMouseWheel", OnWheel)` REPLACES the game's handler (original saved; switching the option off restores it, a /reload restores the MapSeamless hook). Smooth exponential zoom (STEP 1.3, SMOOTH 14), the spot under the cursor stays fixed.
+- Drag: detected by us (button down on the map + cursor moved > 3 px, or the game's `IsPanning()`); the view follows the cursor with no limits. Hands off the game's targets while the button is down (resetting them made the game never notice the drag = "gobbled pans").
+- Requests: we keep the game's `targetScrollX/Y/targetScale` equal to our own state; a target that differs is someone else's request (middle-click, nav bar...) and we glide there ourselves (PAN_SMOOTH 12). Map id changed (not by us) = `Adopt()` what the game shows.
+- Overlays: after writing, calls `ns.RedrawMapDrawings()` (MapDraw) and `ns.RefreshMapTerrain(false)` in the same frame (their own updates ran before ours = one frame at the old zoom = flicker).
+- Hooks other files use: `ns.sheetZoomActive()`, `ns.OnMapSwitch(old,new,oldScale,newScale)` (carry zoom state across a level switch), `ns.CancelSheetZoom()`, `ns.FlyTo(u,v,finalScale)`.
+- **Fly-to (v0.27.0, untested)**: middle-click (MapCenterKey `FlyToPlayer`) converts the player's position onto the map being viewed (`ns.MapPoint`, any number of levels) and calls `ns.FlyTo`: close = one glide; far (more than 0.8 view widths) = phase 1 zoom out
+  until the trip fits, phase 2 glide, phase 3 zoom in to the final scale (the middle-click close-up scale, or the old one). Wheel/drag cancel it; level switches convert the destination/zooms. Falls back to the old switch-map-then-glide when conversion fails.
+
+**Map levels follow the view (MapSeamless `CheckMapLevels`, runs after our frame step)**: zone/continent switching is no longer wheel-driven. (1) view 10 % wider than the whole map (`ParentScaleFromChild <= FitScale*0.9`) -> parent, same view;
+(2) middle of the view over a neighbouring sibling map (`ChildAt(parent, ...)`) -> that map, same view; (3) on a continent/world, a child that fills the view (`scale >= fit*0.98`) -> that child. All via `SwitchTo`
+(which widens limits, places the view exactly, refreshes terrain/drawings, and calls `ns.OnMapSwitch`). Deferred while dragging (`IsPanning`/left button down: a switch kills the game's drag) and while a glide is in flight
+(target differs from the view and the view is moving). `ns.MapPoint(from,to,u,v)` converts a point between related maps (parent/child/sibling/ancestors, depth <= 3). The old wheel/CheckZoomIn/CheckEdgePush paths in MapSeamless
+are still there but gated off while `mapSheetZoom` is on (they run if the user turns it off).
+
+**Other changes this session**
+- MapDraw: strokes are stored per map; `StrokeOn(s, mapID)` converts points onto the viewed map (cached in `s.conv`), so drawings survive level switches. Flicker fix via `ns.RedrawMapDrawings`.
+- MapTerrain: draws tiles past the map's own edge (no trimming/0-1 culling, so zones show their neighbours); visible-range culling covers where the view is AND where it is heading (+2 tiles margin); flat deep-blue sea fill
+  (`SEA_R/G/B`, a texture on the scroll area) behind the tiles; the game's painted map (detail layers, TiledBackground, MapExplorationPin pins) is hidden with sticky `SetAlpha` hooks (`paintedHidden`) while terrain is on
+  (no flicker); `ns.RefreshMapTerrain` is called right after map switches. Debug: with `mapDebug` on, holding Shift over the map records the tile under the cursor into `P13TweaksDB.mapDebugTiles` (col,row,id).
+- MapTerrainData: removed tiles whose file IDs belong to other game versions (they draw green or show wrong art): Eastern Kingdoms (world 0) kept only ids <= 400000 (839 tiles left, 373 removed); Kalimdor (world 1) kept only ids 207000-208999
+  (1018 left, 87 removed - this also removed the 294xxx block that drew a bogus island east of Kalimdor). Zephras Isle (2991) untouched (72 tiles). Some Eastern Kingdoms tiles may still be wrong - use the Shift recorder.
+- NEW `Features/MapSheet.lua`: a standalone "tilesheet" window (`/p13 sheet` or the "Tile map" button in the map's button row; option `mapSheet`): one continuous sheet of a whole continent (buttons: Eastern Kingdoms / Kalimdor / Zephras Isle),
+  own smooth cursor-anchored zoom, drag pan, middle-click centres on you, player arrow, tile-under-cursor readout. This is the prototype whose feel the user loved; MapSheetZoom ports its maths onto the real map.
+- Version bumped 0.20.0 -> 0.27.0 across `Version.lua` and both .tocs.
+
+**Not done / ideas**
+- Zone-level markers (quests etc.) only exist on the zone map you're in; panning over a border swaps them (game design). A bigger fix = draw our own marker layers on the sheet.
+- MapSeamless still carries the old wheel-driven code (dead while mapSheetZoom is on): clean it up once the new zoom is final. The `mapDebug` code (traces, `mapDebugLog`) can be trimmed too.
+- Fly-to tuning knobs: "far" threshold 0.8 view widths, zoom-out margin 1.5x, PAN_SMOOTH/SMOOTH. Untested.
+- If the zoom ever misbehaves: `/p13` -> "Tile-map zoom and pan on the world map" off, then /reload.
+
 ## v0.20.0 (2026-11-20) - hunter low-ammo warning (untested in game; new file in both .tocs, needs a FULL restart)
 - `Features/AmmoWarn.lua`, option `ammoWarn` + `ammoWarnLow` (toggleNumber, default on, threshold default 100), /p13 > Combat > Spells.
 - Hunters only. Reads ammo slot 0 (`GetInventoryItemID/Count("player", 0)`); only warns if a bow/crossbow/gun is equipped in slot 18 (item class 2, subclass 2/18 = arrows, 3 = bullets). Clients without an ammo slot (MoP) never warn.

@@ -11,6 +11,55 @@ local WHEEL_MEMORY    = 0.6   -- a hand-over in only happens this soon after you
 local STEP_FACTOR     = 1.5   -- zoom step size for the extra continent zoom levels
 
 local lastSwitch, lastWheelIn = 0, 0
+local lastWheelAny = 0   -- last time the wheel turned in either direction (debug log only)
+
+-- Debug trace (P13TweaksDB.mapDebug): one line per event, newest 600 kept, saved on /reload.
+local function Trace(text)
+    if not (P13TweaksDB and P13TweaksDB.mapDebug) then return end
+    local tr = P13TweaksDB.mapDebugTrace or {}
+    P13TweaksDB.mapDebugTrace = tr
+    tr[#tr + 1] = ("%.2f %s"):format(GetTime() % 1000, text)
+    if #tr > 600 then table.remove(tr, 1) end
+end
+ns.MapTrace = Trace
+-- Where the mouse is: on screen (pixels from the map area's top-left) and on the map (0-1).
+local function MouseText(sc)
+    local cx, cy = GetCursorPosition()
+    local s = sc:GetEffectiveScale()
+    local l, t = sc:GetLeft(), sc:GetTop()
+    local u, v = nil, nil
+    if sc.GetNormalizedCursorPosition and sc:IsMouseOver() then u, v = sc:GetNormalizedCursorPosition() end
+    return ("mouse px %d,%d map %s,%s"):format(l and (cx / s - l) or -1, t and (t - cy / s) or -1,
+        u and ("%.3f"):format(u) or "off", v and ("%.3f"):format(v) or "off")
+end
+
+-- Let the view sit up to half a view past the map's edge, always (not just while scrolling:
+-- when the extra room closed again the game slid the view back toward the land, a snap). So
+-- zooming near the coast keeps your spot where it is and the empty sea past the edge is just
+-- allowed to show, instead of the game sliding the view inland to avoid it.
+local EDGE_ROOM = 0.5
+local function EdgeRoom()
+    return (P13TweaksDB and P13TweaksDB.mapNoEdgeRoom) and 0 or EDGE_ROOM
+end
+
+-- The game keeps the limits in sc.scrollXExtentsMin/Max and sc.scrollYExtentsMin/Max and sets
+-- them itself every time the zoom changes (a trace showed them shrinking with each step; it
+-- never goes through its CalculateScrollExtents functions while zooming). So widen them right
+-- after it does. `widened` remembers what we last wrote, so we never add the room twice.
+local widened
+local function WidenLimits(sc)
+    local room = EdgeRoom()
+    local a, b, c, d = sc.scrollXExtentsMin, sc.scrollXExtentsMax, sc.scrollYExtentsMin, sc.scrollYExtentsMax
+    if room <= 0 or not (a and b and c and d) then return end
+    if widened and math.abs(a - widened[1]) < 1e-7 and math.abs(b - widened[2]) < 1e-7
+        and math.abs(c - widened[3]) < 1e-7 and math.abs(d - widened[4]) < 1e-7 then
+        return   -- the game hasn't recomputed them since we widened them
+    end
+    sc.scrollXExtentsMin, sc.scrollXExtentsMax = a - room, b + room
+    sc.scrollYExtentsMin, sc.scrollYExtentsMax = c - room, d + room
+    widened = { a - room, b + room, c - room, d + room }
+end
+ns.WidenMapLimits = WidenLimits   -- MapSheetZoom uses the same one, so the room is never added twice
 
 ---------------------------------------------------------------------------
 -- Geometry
@@ -54,14 +103,73 @@ local function ViewCentre(sc)
     return sc:GetNormalizedHorizontalScroll(), sc:GetNormalizedVerticalScroll()
 end
 
+-- A point (u, v) on one map, expressed on another that is its parent, its child, or its sibling
+-- (same parent). Used to carry the zoom's state across a hand-over.
+local function MapPoint(fromMap, toMap, u, v, depth)
+    if fromMap == toMap then return u, v end
+    depth = depth or 0
+    if depth > 3 then return end
+    local fi, ti = C_Map.GetMapInfo(fromMap), C_Map.GetMapInfo(toMap)
+    local pf, pt = fi and fi.parentMapID, ti and ti.parentMapID
+    -- one step up or down
+    if pf and pf == toMap then
+        local minX, minY, rw, rh = Rect(fromMap, pf)
+        if minX then return minX + u * rw, minY + v * rh end
+        return
+    elseif pt and pt == fromMap then
+        local minX, minY, rw, rh = Rect(toMap, pt)
+        if minX then return (u - minX) / rw, (v - minY) / rh end
+        return
+    end
+    -- further away (a sibling, a grandparent...): go up a level from here, then carry on
+    if pf and pf ~= 0 then
+        local pu, pv = MapPoint(fromMap, pf, u, v, depth + 1)
+        if pu then return MapPoint(pf, toMap, pu, pv, depth + 1) end
+    end
+end
+ns.MapPoint = MapPoint
+
 -- Switch maps without the "map changed" ring and with our own zoom applied straight away.
 local function SwitchTo(mapID, scale, x, y)
     local sc = WorldMapFrame.ScrollContainer
+    local oldMap, oldScale = WorldMapFrame:GetMapID(), sc:GetCanvasScale()
+    -- The game limits how far the view may sit off-centre on the new map (a zoomed-out zone can
+    -- only sit centred) and quietly moves it: the visible jump at hand-over. Open the limits up
+    -- (see EDGE_ROOM) and place the view exactly where we ask.
     ns.suppressMapRing = true
     WorldMapFrame:SetMapID(mapID)
     ns.suppressMapRing = false
     sc:InstantPanAndZoom(scale, x, y, true)
+    -- The new map's limits were just set by the game; open them up and put the view exactly
+    -- where the old map showed it (setting the scroll directly, so the limits aren't redone).
+    WidenLimits(sc)
+    if sc.SetNormalizedHorizontalScroll and sc.SetNormalizedVerticalScroll then
+        sc:SetNormalizedHorizontalScroll(x)
+        sc:SetNormalizedVerticalScroll(y)
+    end
+    if sc.SetPanTarget then sc:SetPanTarget(x, y) end
     lastSwitch = GetTime()
+    if ns.RefreshMapTerrain then ns.RefreshMapTerrain(true) end
+    if ns.RedrawMapDrawings then ns.RedrawMapDrawings() end   -- the lines for the new map, this same frame
+    -- let the tile-map zoom carry its state (target zoom, the spot under the cursor) to the new map
+    if ns.OnMapSwitch then ns.OnMapSwitch(oldMap, mapID, oldScale, sc:GetCanvasScale()) end
+    if P13TweaksDB and P13TweaksDB.mapDebug then
+        -- wanted vs. what the game actually applied (it clamps to the new map's limits)
+        local line = ("-> %s  wanted scale %.4f at %.3f,%.3f  got scale %.4f (target %.4f) at %.3f,%.3f  min %.4f max %.4f"):format(
+            tostring(mapID), scale, x, y, sc:GetCanvasScale(), sc.targetScale or -1,
+            sc:GetNormalizedHorizontalScroll(), sc:GetNormalizedVerticalScroll(),
+            sc.GetScaleForMinZoom and sc:GetScaleForMinZoom() or -1, sc.GetScaleForMaxZoom and sc:GetScaleForMaxZoom() or -1)
+        -- saved to the SavedVariables file on /reload or logout, so it can be read without copying chat
+        P13TweaksDB.mapDebugLog = P13TweaksDB.mapDebugLog or {}
+        local function ext() return ("ext x %.3f..%.3f y %.3f..%.3f"):format(
+            sc.scrollXExtentsMin or -1, sc.scrollXExtentsMax or -1, sc.scrollYExtentsMin or -1, sc.scrollYExtentsMax or -1) end
+        table.insert(P13TweaksDB.mapDebugLog, "v" .. (ns.version or "?") .. " " .. line .. "  " .. ext())
+        -- and where the view is shortly afterwards, to catch it moving on its own
+        C_Timer.After(0.5, function()
+            table.insert(P13TweaksDB.mapDebugLog, ("   0.5s later: scale %.4f at %.3f,%.3f  %s"):format(
+                sc:GetCanvasScale(), sc:GetNormalizedHorizontalScroll(), sc:GetNormalizedVerticalScroll(), ext()))
+        end)
+    end
 end
 
 ---------------------------------------------------------------------------
@@ -198,6 +306,7 @@ local function EnterChild(sc, mapID, child)
 end
 
 local function CheckZoomIn()
+    if ns.sheetZoomActive and ns.sheetZoomActive() then return end
     if not ns:Get("mapSeamless") or not WorldMapFrame:IsShown() then return end
     local now = GetTime()
     if now - lastWheelIn > WHEEL_MEMORY or now - lastSwitch < SWITCH_COOLDOWN then return end
@@ -292,16 +401,87 @@ local function CheckEdgePush(sc)
     -- the game's own sign: dragging the mouse left moves the view right, etc.
     local dx, dy = px - cx, cy - py
     local push = 0
-    if dx > 0 and sc.targetScrollX >= sc.scrollXExtentsMax - EDGE_EPS then push = push + dx end
-    if dx < 0 and sc.targetScrollX <= sc.scrollXExtentsMin + EDGE_EPS then push = push - dx end
-    if dy > 0 and sc.targetScrollY >= sc.scrollYExtentsMax - EDGE_EPS then push = push + dy end
-    if dy < 0 and sc.targetScrollY <= sc.scrollYExtentsMin + EDGE_EPS then push = push - dy end
+    local room = EdgeRoom()   -- the limits are widened by this; the zone's real edge is inside them
+    if dx > 0 and sc.targetScrollX >= sc.scrollXExtentsMax - room - EDGE_EPS then push = push + dx end
+    if dx < 0 and sc.targetScrollX <= sc.scrollXExtentsMin + room + EDGE_EPS then push = push - dx end
+    if dy > 0 and sc.targetScrollY >= sc.scrollYExtentsMax - room - EDGE_EPS then push = push + dy end
+    if dy < 0 and sc.targetScrollY <= sc.scrollYExtentsMin + room + EDGE_EPS then push = push - dy end
     pushed = push > 0 and pushed + push / sc:GetEffectiveScale() or 0
     if pushed >= EDGE_PUSH_PIXELS and GetTime() - lastSwitch >= SWITCH_COOLDOWN then
         pushed = 0
         ParentSameView(sc)
     end
 end
+
+---------------------------------------------------------------------------
+-- Map levels follow the view (used with the tile-map zoom, which has no wheel hand-overs):
+--  * zoomed out until the view is wider than this zone/continent -> its parent, same view
+--  * the middle of the view moves into a neighbouring zone        -> that zone, same view
+--  * zoomed in on a continent until a zone fills the view         -> that zone, same view
+-- Switching up needs the view 10% wider than the map; switching down needs the zone to fill the
+-- view, so there is a gap between the two and it never flips back and forth.
+---------------------------------------------------------------------------
+
+local glideX, glideY   -- where the view was the last time we looked (to tell whether it's moving)
+local function CheckMapLevels(sc)
+    if not (ns:Get("mapSeamless") and WorldMapFrame:IsShown()) then return end
+    if GetTime() - lastSwitch < SWITCH_COOLDOWN then return end
+    -- Not while the map is being dragged: changing maps ends the game's drag (it started on the old
+    -- map), and panning then stays dead until you click again. The switch happens when you let go.
+    if (sc.IsPanning and sc:IsPanning()) or (IsMouseButtonDown("LeftButton") and sc:IsMouseOver()) then return end
+    local mapID = WorldMapFrame:GetMapID()
+    local info = mapID and C_Map.GetMapInfo(mapID)
+    if not (info and info.mapType and info.mapType >= 1 and info.mapType <= 3) then return end   -- world, continent, zone
+    local scale = sc:GetCanvasScale()
+    if not (scale and scale > 0 and scale < math.huge) then return end
+    local cx, cy = ViewCentre(sc)
+    -- Not while the view is still gliding to a target (centring on yourself, say): switching maps
+    -- re-aims the glide at the current spot and it stops half way. Wait until it has arrived.
+    -- (only if the view is really moving: a target it can't reach mustn't block this for good)
+    local moving = glideX and (math.abs(cx - glideX) > 0.0003 or math.abs(cy - glideY) > 0.0003)
+    glideX, glideY = cx, cy
+    if moving and sc.targetScrollX and (math.abs(sc.targetScrollX - cx) > 0.003 or math.abs((sc.targetScrollY or cy) - cy) > 0.003) then return end
+    if sc.targetScale and math.abs(sc.targetScale - scale) > scale * 0.002 then return end
+    local parent = info.parentMapID
+
+    if parent and parent ~= 0 and info.mapType >= 2 then
+        local minX, minY, rw, rh = Rect(mapID, parent)
+        if minX and Art(mapID) and Art(parent) then
+            local pScale = ParentScaleFromChild(scale, mapID, parent)
+            local fit = FitScale(mapID, parent)
+            -- 1. zoomed out past the whole map
+            if fit and pScale <= fit * 0.9 then
+                Trace(("LEVEL up %s -> %s  (scale %.4f, parent scale %.4f, fit %.4f)"):format(mapID, parent, scale, pScale, fit))
+                SwitchTo(parent, pScale, minX + cx * rw, minY + cy * rh)
+                return
+            end
+            -- 2. the middle of the view is over a neighbouring map
+            local pu, pv = minX + cx * rw, minY + cy * rh
+            local sib = ChildAt(parent, pu, pv)
+            if sib and sib ~= mapID then
+                local sMinX, sMinY, sw, sh = Rect(sib, parent)
+                if sMinX and Art(sib) then
+                    local nu = math.min(math.max((pu - sMinX) / sw, 0), 1)
+                    local nv = math.min(math.max((pv - sMinY) / sh, 0), 1)
+                    Trace(("LEVEL sideways %s -> %s  (view %.3f,%.3f)"):format(mapID, sib, cx, cy))
+                    SwitchTo(sib, ChildScaleFromParent(pScale, sib, parent), nu, nv)
+                    return
+                end
+            end
+        end
+    end
+
+    -- 3. a map below this one fills the view
+    if info.mapType <= 2 then
+        local child = ChildAt(mapID, cx, cy)
+        local fit = child and FitScale(child, mapID)
+        if fit and scale >= fit * 0.98 then
+            Trace(("LEVEL down %s -> %s  (scale %.4f, fit %.4f)"):format(mapID, child, scale, fit))
+            EnterChild(sc, mapID, child)
+        end
+    end
+end
+ns.CheckMapLevels = CheckMapLevels
 
 ---------------------------------------------------------------------------
 -- Mouse wheel
@@ -314,10 +494,51 @@ local function WasAtMaxZoom(sc)
     return prevTargetScale >= sc:GetScaleForMaxZoom() - 0.001
 end
 
+-- Where the view's centre was just before this scroll (updated every frame). The game moves the
+-- view itself while handling a scroll, clamping it to its own narrow limits, so by the time we run
+-- the view has already snapped (seen in the trace: y 0.337 -> 0.363 -> 0.426 on the way out).
+-- We work from where it was before instead.
+local preX, preY
+
+-- Zoom from scale s0 to s1 keeping the map point under the mouse where it is on screen, computed
+-- from the view as it was before the scroll, and place the view there straight away.
+local function AnchorZoom(sc, s0, s1)
+    if not (preX and s0 and s1 and s0 > 0 and s1 > 0 and sc.Child) then return end
+    local W, H = sc.Child:GetWidth(), sc.Child:GetHeight()
+    local l, r, t, b = sc:GetLeft(), sc:GetRight(), sc:GetTop(), sc:GetBottom()
+    if not (W and W > 0 and H and H > 0 and l and r and t and b) then return end
+    local cx, cy = GetCursorPosition()
+    local es = sc:GetEffectiveScale()
+    local px, py = cx / es, cy / es
+    local ax, ay = preX, preY   -- mouse outside the map: zoom about the middle of the view
+    if px >= l and px <= r and py >= b and py <= t then
+        ax = preX + (px - (l + r) / 2) / (s0 * W)
+        ay = preY - (py - (t + b) / 2) / (s0 * H)
+    end
+    local k = s0 / s1
+    local nx, ny = ax + (preX - ax) * k, ay + (preY - ay) * k
+    if sc.SetNormalizedHorizontalScroll and sc.SetNormalizedVerticalScroll then
+        sc:SetNormalizedHorizontalScroll(nx)
+        sc:SetNormalizedVerticalScroll(ny)
+    end
+    if sc.SetPanTarget then sc:SetPanTarget(nx, ny) end
+    preX, preY = nx, ny   -- another turn in the same frame builds on this one
+    prevTargetScale = s1
+end
+
 local function OnWheel(sc, delta)
+    if ns.sheetZoomActive and ns.sheetZoomActive() then return end   -- tile-map zoom has taken over the wheel
+    lastWheelAny = GetTime()
+    WidenLimits(sc)   -- the game just recomputed them for the new zoom
+    Trace(("WHEEL %s  map %s scale %.4f->%.4f  view %.3f,%.3f  %s"):format(delta > 0 and "IN" or "OUT",
+        tostring(WorldMapFrame:GetMapID()), sc:GetCanvasScale(), sc.targetScale or -1,
+        sc:GetNormalizedHorizontalScroll(), sc:GetNormalizedVerticalScroll(), MouseText(sc)))
     if delta > 0 then
         lastWheelIn = GetTime()
-        if not WasAtMaxZoom(sc) then return end
+        if not WasAtMaxZoom(sc) then
+            AnchorZoom(sc, prevTargetScale, sc.targetScale or sc:GetCanvasScale())
+            return
+        end
         -- Can't zoom this map any further (e.g. the world map)? Scrolling in over a
         -- continent or zone goes straight into it.
         if ns:Get("mapSeamless") and GetTime() - lastSwitch >= SWITCH_COOLDOWN then
@@ -338,16 +559,8 @@ local function OnWheel(sc, delta)
         return
     end
 
-    -- Normal scroll out: pull back around the cursor. The game already set the new zoom
-    -- target; we only set where the view should end up.
-    local from = prevTargetScale or sc:GetCanvasScale()
-    local to = NextLowerScale(sc, from)
-    local ux, uy = CursorPos(sc)
-    if to and ux and sc.SetPanTarget then
-        local cx, cy = ViewCentre(sc)
-        local k = sc:GetCanvasScale() / to
-        sc:SetPanTarget(ux + (cx - ux) * k, uy + (cy - uy) * k)
-    end
+    -- Normal scroll out: pull back around the cursor (see AnchorZoom).
+    AnchorZoom(sc, prevTargetScale, sc.targetScale or sc:GetCanvasScale())
 end
 
 ns:RegisterOption({
@@ -399,17 +612,61 @@ watcher:RegisterEvent("PLAYER_LOGIN")
 watcher:SetScript("OnEvent", function()
     -- tidy up settings from the older jump-up-a-map options this replaces
     P13TweaksDB.mapZoomOutParent, P13TweaksDB.mapParentCentre, P13TweaksDB.mapZoomOutCentre = nil, nil, nil
+    P13TweaksDB.mapDebugTrace, P13TweaksDB.mapDebugCalls = nil, nil   -- each session's debug trace starts fresh
+    -- Test switches from earlier versions were saved between sessions and silently kept the new
+    -- edge room (and the other fixes) switched off. They are session-only now: always clear them.
+    P13TweaksDB.mapNoEdgeRoom, P13TweaksDB.mapNoSteer, P13TweaksDB.mapNoHold = nil, nil, nil
 
     local sc = WorldMapFrame and WorldMapFrame.ScrollContainer
     if not (sc and sc.InstantPanAndZoom and sc.GetNormalizedHorizontalScroll) then return end
     sc:HookScript("OnMouseWheel", OnWheel)
+
+    if P13TweaksDB and P13TweaksDB.mapDebug then
+        -- list the map scroll area's methods and fields, to find what limits the view's position
+        local names = {}
+        local mt = getmetatable(sc)
+        local idx = mt and type(mt.__index) == "table" and mt.__index
+        for k, v in pairs(idx or {}) do
+            if type(k) == "string" and (k:find("Extent") or k:find("Scroll") or k:find("Pan") or k:find("Zoom") or k:find("Clamp") or k:find("Update")) then
+                names[#names + 1] = k .. " (" .. type(v) .. ")"
+            end
+        end
+        for k, v in pairs(sc) do
+            if type(k) == "string" and (k:find("xtent") or k:find("target") or k:find("Target") or k:find("zoom") or k:find("scroll")) then
+                names[#names + 1] = "field " .. k .. " = " .. tostring(v)
+            end
+        end
+        table.sort(names)
+        P13TweaksDB.mapDebugFuncs = names
+    end
     if sc.CreateZoomLevels then hooksecurefunc(sc, "CreateZoomLevels", AdjustZoomLevels) end
 
     -- Watch the zoom while the map is open, to hand over to a zone once it fills the view.
     local poll = CreateFrame("Frame", nil, WorldMapFrame)
     poll:SetScript("OnUpdate", function()
         prevTargetScale = sc.targetScale or sc:GetCanvasScale()
+        WidenLimits(sc)
+        if P13TweaksDB and P13TweaksDB.mapDebug and GetTime() - lastWheelAny < 2 then
+            -- after a scroll, a line whenever the view, zoom or limits change; a jump of the view's
+            -- centre of more than 0.02 in one frame is marked "SNAP"
+            local vx, vy = sc:GetNormalizedHorizontalScroll(), sc:GetNormalizedVerticalScroll()
+            local snap = ns.lastViewX and (math.abs(vx - ns.lastViewX) > 0.02 or math.abs(vy - ns.lastViewY) > 0.02)
+            ns.lastViewX, ns.lastViewY = vx, vy
+            local body = ("map %s scale %.4f->%.4f  view %.3f,%.3f -> %s,%s  ext x %s..%s y %s..%s  %s"):format(
+                tostring(WorldMapFrame:GetMapID()), sc:GetCanvasScale(), sc.targetScale or -1, vx, vy,
+                sc.targetScrollX and ("%.3f"):format(sc.targetScrollX) or "?",
+                sc.targetScrollY and ("%.3f"):format(sc.targetScrollY) or "?",
+                sc.scrollXExtentsMin and ("%.3f"):format(sc.scrollXExtentsMin) or "?",
+                sc.scrollXExtentsMax and ("%.3f"):format(sc.scrollXExtentsMax) or "?",
+                sc.scrollYExtentsMin and ("%.3f"):format(sc.scrollYExtentsMin) or "?",
+                sc.scrollYExtentsMax and ("%.3f"):format(sc.scrollYExtentsMax) or "?", MouseText(sc))
+            if body ~= ns.lastTraceBody or snap then
+                ns.lastTraceBody = body
+                Trace((snap and "SNAP " or "     ") .. body)
+            end
+        end
         CheckZoomIn()
-        CheckEdgePush(sc)
+        if not (ns.sheetZoomActive and ns.sheetZoomActive()) then CheckEdgePush(sc) end   -- the tile-map zoom switches levels by the view instead
+        preX, preY = ViewCentre(sc)
     end)
 end)

@@ -352,6 +352,27 @@ local function RaiseLayer(child, force)
     return #kids, maxLevel, topName
 end
 
+-- The stroke's points on the map being viewed. Strokes belong to the map they were drawn on; on a
+-- related map (the zone you zoomed into, the continent you zoomed out to) the points are converted,
+-- so drawings survive the map changing level. Converted copies are kept until the stroke changes.
+local function StrokeOn(s, mapID)
+    if s.map == mapID then return s.pts end
+    s.conv = s.conv or {}
+    local c = s.conv[mapID]
+    if c and c.n == #s.pts then return c.pts or nil end
+    local out
+    if ns.MapPoint then
+        out = {}
+        for i, p in ipairs(s.pts) do
+            local u, v = ns.MapPoint(s.map, mapID, p[1], p[2])
+            if not u then out = nil break end
+            out[i] = { u, v }
+        end
+    end
+    s.conv[mapID] = { n = #s.pts, pts = out or false }
+    return out
+end
+
 local function Redraw(force)
     local sc = WorldMapFrame and WorldMapFrame.ScrollContainer
     local child = sc and sc.Child
@@ -374,15 +395,16 @@ local function Redraw(force)
     local minutes = FadeMinutes()
     local now = GetTime()
     for _, s in ipairs(strokes) do
-        if s.map == mapID and #s.pts >= 2 then
+        local pts = StrokeOn(s, mapID)
+        if pts and #pts >= 2 then
             local alpha = 0.9
             if minutes then
                 local left = minutes * 60 - (now - s.t)
                 if left < FADE_SECONDS then alpha = 0.9 * math.max(0.1, left / FADE_SECONDS) end
             end
-            for i = 2, #s.pts do
+            for i = 2, #pts do
                 if linesUsed >= 3000 then break end
-                local a, b = s.pts[i - 1], s.pts[i]
+                local a, b = pts[i - 1], pts[i]
                 local l = GetLine()
                 l:SetThickness(THICKNESS)
                 l:SetColorTexture(s.color[1], s.color[2], s.color[3], alpha)
@@ -392,6 +414,9 @@ local function Redraw(force)
         end
     end
 end
+
+-- Lets the tile-map zoom redraw the lines in the same frame it moves the map (see MapSheetZoom.lua).
+ns.RedrawMapDrawings = function() Redraw(false) end
 
 ---------------------------------------------------------------------------
 -- Draw mode: the mouse catcher over the map

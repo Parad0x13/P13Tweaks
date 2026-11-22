@@ -15,6 +15,8 @@ local TILE_YARDS = 533.33333
 local MAP_TYPE_CONTINENT = Enum and Enum.UIMapType and Enum.UIMapType.Continent or 2
 local MAP_TYPE_ZONE      = Enum and Enum.UIMapType and Enum.UIMapType.Zone or 3
 
+local SEA_R, SEA_G, SEA_B = 0.04, 0.16, 0.25   -- the flat sea colour (deep blue)
+local blackFill      -- the flat sea colour behind the terrain tiles, over the whole scroll area
 local layer          -- holds our textures, inside the map's scroll child
 local labelLayer     -- zone names on continent maps
 local tilesInUse = {} -- key (continent * 4096 + col * 64 + row) -> texture
@@ -78,15 +80,38 @@ local function ReleaseAll()
     end
 end
 
--- The painted "explored area" pieces of zone maps draw above our tiles; hide them while the
--- terrain is showing (fully opaque terrain would just be covered by them).
-local function SetExplorationShown(shown)
-    if not WorldMapFrame.EnumeratePinsByTemplate then return end
-    for pin in WorldMapFrame:EnumeratePinsByTemplate("MapExplorationPinTemplate") do
-        pin:SetAlpha(shown and 1 or 0)
+-- While the terrain is showing, the game's own painted map stays hidden (its picture tiles,
+-- the backdrop behind them, and the "explored area" pieces that draw above our tiles), so
+-- only our tiles are left: no painted ocean or land around them, nothing extra past the map's
+-- edge. Setting the transparency once per frame wasn't enough: the game resets it whenever it
+-- rebuilds the map's layers and icons, and every reset showed for a frame (flicker). So each
+-- of those frames gets a hook that keeps it at zero while we want it hidden.
+local paintedHidden = false
+
+local function Hide(f, hidden)
+    if not (f and f.SetAlpha) then return end
+    if not f.p13Hooked then
+        f.p13Hooked = true
+        hooksecurefunc(f, "SetAlpha", function(self, a)
+            if paintedHidden and a ~= 0 then self:SetAlpha(0) end
+        end)
     end
+    f:SetAlpha(hidden and 0 or 1)
 end
 
+local function SetPaintedShown(shown)
+    paintedHidden = not shown
+    if blackFill then blackFill:SetShown(not shown) end
+    local pool = WorldMapFrame.detailLayerPool
+    if pool and pool.EnumerateActive then
+        for layerFrame in pool:EnumerateActive() do Hide(layerFrame, not shown) end
+    end
+    local child = WorldMapFrame.ScrollContainer and WorldMapFrame.ScrollContainer.Child
+    if child and child.TiledBackground then Hide(child.TiledBackground, not shown) end
+    if WorldMapFrame.EnumeratePinsByTemplate then
+        for pin in WorldMapFrame:EnumeratePinsByTemplate("MapExplorationPinTemplate") do Hide(pin, not shown) end
+    end
+end
 local function DrawTiles(b, sc, child)
     local W, H = child:GetWidth(), child:GetHeight()
     local scale = sc:GetCanvasScale()
@@ -99,11 +124,21 @@ local function DrawTiles(b, sc, child)
     local function V(row) return (b.top - (32 - row) * TILE_YARDS) / (b.top - b.bottom) end
 
     -- Visible part of the map (map fractions), one tile of margin each side, kept on the map.
+    -- Covers where the view is AND where its zoom/pan animation is heading (the zoomed-out
+    -- end sees the most map), so a fast zoom or pan doesn't outrun the loaded tiles and leave
+    -- holes in the picture. Two tiles of margin instead of one.
     local hs, vs = sc:GetNormalizedHorizontalScroll(), sc:GetNormalizedVerticalScroll()
-    local halfU = sc:GetWidth() / scale / W / 2
-    local halfV = sc:GetHeight() / scale / H / 2
-    local uMin, uMax = math.max(0, hs - halfU - du), math.min(1, hs + halfU + du)
-    local vMin, vMax = math.max(0, vs - halfV - dv), math.min(1, vs + halfV + dv)
+    local hs2, vs2 = sc.targetScrollX or hs, sc.targetScrollY or vs
+    local scale2 = sc.targetScale
+    if not (scale2 and scale2 > 0 and scale2 < math.huge) then scale2 = scale end
+    local lowScale = math.min(scale, scale2)
+    local halfU = sc:GetWidth() / lowScale / W / 2
+    local halfV = sc:GetHeight() / lowScale / H / 2
+    local mu, mv = du * 2, dv * 2
+    -- (not kept to the map's own 0-1 area: a zone's tiles continue past its border, so you can
+    -- see and pan into the neighbouring zones; the tile grid itself (0-63) is the only limit)
+    local uMin, uMax = math.min(hs, hs2) - halfU - mu, math.max(hs, hs2) + halfU + mu
+    local vMin, vMax = math.min(vs, vs2) - halfV - mv, math.max(vs, vs2) + halfV + mv
 
     local cMin = math.max(0, math.floor((uMin - U(0)) / du))
     local cMax = math.min(63, math.floor((uMax - U(0)) / du))
@@ -120,11 +155,11 @@ local function DrawTiles(b, sc, child)
             -- keyed by continent too, so a continent <-> zone hand-over keeps the loaded tiles
             local key = b.continent * 4096 + col * 64 + row
             if id then
-                -- tile rectangle on the map, trimmed to the map's own edges
+                -- the whole tile, even where it hangs over the map's own edge
                 local u0, v0 = U(col), V(row)
-                local x0, x1 = math.max(0, u0), math.min(1, u0 + du)
-                local y0, y1 = math.max(0, v0), math.min(1, v0 + dv)
-                if x1 > x0 and y1 > y0 then
+                local x0, x1 = u0, u0 + du
+                local y0, y1 = v0, v0 + dv
+                do
                     wanted[key] = true
                     local t = tilesInUse[key]
                     if not t then
@@ -213,15 +248,17 @@ local function Refresh(force)
     -- The first time a map opens its canvas has no size yet (scale comes out infinite):
     -- wait for a later frame instead of drawing with nonsense numbers.
     if b then
+        SetPaintedShown(false)   -- from the first frame, so the painted map never shows then vanishes
         local scale, W = sc:GetCanvasScale(), child:GetWidth()
         if not (scale and scale > 0 and scale < math.huge and W and W > 0) then return end
     end
 
-    local sig = b and ("%d:%.4f:%.4f:%.4f:%.0f:%.0f:%.2f:%s"):format(mapID, sc:GetCanvasScale(),
+    local sig = b and ("%d:%.4f:%.4f:%.4f:%.0f:%.0f:%.2f:%s:%.4f:%.4f:%.4f"):format(mapID, sc:GetCanvasScale(),
         sc:GetNormalizedHorizontalScroll(), sc:GetNormalizedVerticalScroll(),
-        child:GetWidth(), child:GetHeight(), Alpha(), tostring(ns:Get("mapTerrainLabels"))) or "off"
+        child:GetWidth(), child:GetHeight(), Alpha(), tostring(ns:Get("mapTerrainLabels")),
+        sc.targetScale or 0, sc.targetScrollX or 0, sc.targetScrollY or 0) or "off"
     if sig == lastSig and not force then
-        if b then SetExplorationShown(false) end  -- the map may have re-made them; cheap
+        if b then SetPaintedShown(false) end  -- the map may have re-made them; cheap
         return
     end
     lastSig = sig
@@ -229,13 +266,17 @@ local function Refresh(force)
     if not b then
         ReleaseAll()
         HideLabels()
-        SetExplorationShown(true)
+        SetPaintedShown(true)
         return
     end
     DrawTiles(b, sc, child)   -- re-places every tile and drops the ones out of view
     DrawLabels(mapID, sc, child)
-    SetExplorationShown(false)
+    SetPaintedShown(false)
 end
+
+-- Lets MapSeamless redraw straight after it switches maps, in the same frame, so the game's
+-- own fog/art for the new map is never drawn for even one frame before we replace it.
+ns.RefreshMapTerrain = Refresh
 
 ns:RegisterOption({
     key = "mapTerrain",
@@ -445,6 +486,14 @@ loader:SetScript("OnEvent", function()
     local sc = WorldMapFrame and WorldMapFrame.ScrollContainer
     if not (sc and sc.Child and sc.GetCanvasScale and sc.GetNormalizedHorizontalScroll) then return end
 
+    -- One flat sea colour behind everything: where the terrain tiles don't reach (sea, and the
+    -- margin past the map's edge) you get this, not the map window's wooden frame or painted
+    -- ocean. A texture of the scroll area itself, so it always draws beneath the map's contents.
+    blackFill = sc:CreateTexture(nil, "BACKGROUND")
+    blackFill:SetAllPoints(sc)
+    blackFill:SetColorTexture(SEA_R, SEA_G, SEA_B, 1)
+    blackFill:Hide()
+
     layer = CreateFrame("Frame", nil, sc.Child)
     layer:SetAllPoints(sc.Child)
     layer:SetFrameLevel(sc.Child:GetFrameLevel())  -- under the pins
@@ -534,6 +583,25 @@ loader:SetScript("OnEvent", function()
     local sinceCave = 1
     poll:SetScript("OnUpdate", function(_, elapsed)
         Refresh(false)
+        -- Debug aid: with mapDebug on, holding Shift records the terrain tile under the cursor
+        -- (column, row, file ID, map) in P13TweaksDB.mapDebugTiles, to find tiles that draw wrong.
+        if P13TweaksDB and P13TweaksDB.mapDebug and IsShiftKeyDown() then
+            local cx, cy = GetCursorPosition()
+            for key, t in pairs(tilesInUse) do
+                local l, r, top, bot = t:GetLeft(), t:GetRight(), t:GetTop(), t:GetBottom()
+                local s = t:GetEffectiveScale()
+                if l and r and top and bot and cx / s >= l and cx / s <= r and cy / s >= bot and cy / s <= top then
+                    local cont = math.floor(key / 4096)
+                    local idx = key % 4096
+                    local rec = ("world %d col %d row %d id %s"):format(cont, math.floor(idx / 64), idx % 64,
+                        tostring(ns.TerrainTiles[cont] and ns.TerrainTiles[cont][idx]))
+                    P13TweaksDB.mapDebugTiles = P13TweaksDB.mapDebugTiles or {}
+                    local seen = false
+                    for _, x in ipairs(P13TweaksDB.mapDebugTiles) do if x == rec then seen = true break end end
+                    if not seen then table.insert(P13TweaksDB.mapDebugTiles, rec) end
+                end
+            end
+        end
         sinceCave = sinceCave + elapsed
         if sinceCave >= 0.25 then sinceCave = 0; CaveCheck() end
     end)

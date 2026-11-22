@@ -21,10 +21,29 @@ local function ScaleForYards(sc, mapID, yards)
     return scale
 end
 
+-- With the tile-map zoom on: fly to the player on the map being shown (zooming out first if it's far),
+-- whatever map level they're on. Returns false if that isn't possible and the old way should be used.
+local function FlyToPlayer(zoomIn)
+    if not (ns.FlyTo and ns.MapPoint and ns.sheetZoomActive and ns.sheetZoomActive()) then return false end
+    local sc = WorldMapFrame.ScrollContainer
+    local playerMap = C_Map.GetBestMapForUnit("player")
+    if not playerMap then return false end
+    local pos = C_Map.GetPlayerMapPosition(playerMap, "player")
+    local px, py
+    if pos then px, py = pos:GetXY() end
+    if not px or (px == 0 and py == 0) then return false end
+    local cur = WorldMapFrame:GetMapID()
+    local u, v = ns.MapPoint(playerMap, cur, px, py)
+    if not u then return false end   -- an unrelated map: the old way switches to the player's map
+    return ns.FlyTo(u, v, zoomIn and ScaleForYards(sc, cur, CLOSE_VIEW_YARDS) or nil)
+end
+
 -- zoomIn: also zoom in close around you (middle-click); otherwise keep the zoom.
 local function CentreOnPlayer(zoomIn)
     if not WorldMapFrame:IsShown() then return end
     local sc = WorldMapFrame.ScrollContainer
+    if ns.CancelSheetZoom then ns.CancelSheetZoom() end   -- the tile-map zoom must not pull the view back
+    if FlyToPlayer(zoomIn) then return end
 
     -- Looking at a different map (another zone, the continent, the world)? Go to your zone first.
     local playerMap = C_Map.GetBestMapForUnit("player")
