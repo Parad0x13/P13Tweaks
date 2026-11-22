@@ -10,7 +10,7 @@ local ADDON_NAME, ns = ...
 
 local LAYOUT = {
     { name = "Map", icon = "Interface\\Icons\\INV_Misc_Map_01", sections = {
-        { "Zooming", { "mapSeamless", "mapZoomStep", "mapExtraZoomIn", "mapRemember" } },
+        { "Zooming", { "mapSheetZoom", "mapSeamless", "mapZoomStep", "mapExtraZoomIn", "mapRemember" } },
         { "Finding yourself", { "mapPlayerCircle", "mapMiddleClick", "mapSmoothPan" } },
         { "Look", { "mapTerrain", "mapTerrainLabels", "mapTerrainButton", "mapCaveView" } },
         { "Travel", { "mapRoute", "flightPoints", "flightPointsTaxi" } },

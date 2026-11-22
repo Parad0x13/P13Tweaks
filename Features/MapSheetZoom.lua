@@ -144,18 +144,12 @@ local function Frame(dt)
                 end
             end
 
-            -- a fly-to (middle-click centring): zoom out, glide across, zoom in
+            -- a fly-to (middle-click centring): pan and zoom together in one glide
             if fly and not anchored then
-                if fly.phase == 1 then
-                    goalS, goalX, goalY = fly.midS, ownX, ownY
-                    if math.abs(ownS - fly.midS) < fly.midS * 0.04 then fly.phase = 2 end
-                elseif fly.phase == 2 then
-                    goalS, goalX, goalY = fly.midS, fly.tu, fly.tv
-                    local dxp, dyp = (ownX - fly.tu) * W * ownS, (ownY - fly.tv) * H * ownS
-                    if dxp * dxp + dyp * dyp < 100 then fly.phase = 3 end   -- within 10 pixels
-                else
-                    goalS, goalX, goalY = fly.finalS, fly.tu, fly.tv
-                    if math.abs(ownS - fly.finalS) < fly.finalS * 0.02 then goalS, fly = fly.finalS, nil end
+                goalS, goalX, goalY = fly.finalS, fly.tu, fly.tv
+                local dxp, dyp = (ownX - fly.tu) * W * ownS, (ownY - fly.tv) * H * ownS
+                if dxp * dxp + dyp * dyp < 100 and math.abs(ownS - fly.finalS) < fly.finalS * 0.02 then
+                    goalS, fly = fly.finalS, nil
                 end
                 -- keep the game's own target equal to where we're heading, so it isn't taken for a request
                 if sc.SetPanTarget then sc:SetPanTarget(goalX, goalY) end
@@ -182,6 +176,7 @@ local function Frame(dt)
     if math.abs(cs - ownS) > ownS * 0.0005 then
         sc:InstantPanAndZoom(ownS, ownX, ownY, true)
         if ns.WidenMapLimits then ns.WidenMapLimits(sc) end
+        if ns.SyncPlayerPin then ns.SyncPlayerPin() end   -- the arrow re-measures against the scale we just wrote
     end
     local gx, gy = sc:GetNormalizedHorizontalScroll(), sc:GetNormalizedVerticalScroll()
     if math.abs(gx - ownX) > EPS or math.abs(gy - ownY) > EPS then
@@ -245,7 +240,7 @@ ns.OnMapSwitch = function(oldMap, newMap, oldScale, newScale)
 end
 
 -- Fly the view to a spot (u, v) on the map being shown, ending at zoom finalS (nil = keep the zoom).
--- Close by: one glide. Far away: zoom out until the trip fits, glide across, zoom back in.
+-- Pan and zoom glide together toward the target in one motion (no separate zoom-out phase).
 ns.FlyTo = function(u, v, finalS)
     if not (sc and Enabled() and ownS and u and v) then return false end
     local W, H = sc.Child:GetWidth(), sc.Child:GetHeight()
@@ -257,15 +252,7 @@ ns.FlyTo = function(u, v, finalS)
     local dx, dy = (u - ownX) * W * ownS, (v - ownY) * H * ownS
     local dist = math.sqrt(dx * dx + dy * dy)
     Trace(("FLY to %.3f,%.3f  distance %.0f px (view %.0f px wide)  scale %.4f -> %.4f"):format(u, v, dist, viewW, ownS, finalS))
-    if dist < viewW * 0.8 then
-        goalX, goalY, goalS = u, v, finalS
-        if sc.SetPanTarget then sc:SetPanTarget(u, v) end
-        return true
-    end
-    local du, dv = math.abs(u - ownX), math.abs(v - ownY)
-    local sFit = math.min(viewW / (math.max(du * W, 1) * 1.5), viewH / (math.max(dv * H, 1) * 1.5))
-    local midS = Clamp(math.min(ownS, finalS, sFit), lo, hi)
-    fly = { phase = (midS < ownS * 0.97) and 1 or 2, tu = u, tv = v, midS = midS, finalS = finalS }
+    fly = { tu = u, tv = v, midS = finalS, finalS = finalS }
     return true
 end
 

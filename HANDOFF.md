@@ -18,6 +18,19 @@ TaggedMarks, QuestWhere, Version.lua. Version is kept in THREE places and bumped
 - **First things to check next session**: (1) any Lua error popups; (2) `/p13 questsdebug` counters while two clients are grouped (are hellos / full lists repeating?);
   (3) does "Synced" appear; (4) map markers (needs QuestieDB); (5) `/p13 followdebug`; (6) nameplates on for TaggedMarks.
 
+## v0.27.1 - v0.27.14 (2026-11-21) - fly-to redesign + OPEN BUG: flicker at map-level switches
+- **Fly-to is now ONE combined glide** (v0.27.1, user tested: "looks good"): `ns.FlyTo` just sets `fly = {tu,tv,finalS}`; each frame the goal is that point + final scale and pan and zoom ease together (the old zoom-out / glide / zoom-in phases are gone). Done when within 10 px and 2 % of the scale.
+- **OPEN BUG (pinned, see below)**: for ~0.2 s at a map-level switch (e.g. area -> zone zooming out) the player arrow and nearby icons (an anvil) are drawn far too big / ghosted; on the painted map (terrain off) the map itself is drawn oddly instead.
+  Happens with every other addon disabled. Ruled out with logs: pin size formula (arrow size x canvasScale is always 27 px, even at the end of `SwitchTo`), the game's player ping (`StartPlayerPing(2)` fires at every `SetMapID`, was suppressed, no change),
+  hiding all `EnumerateAllPins` pins for 5 s (no visible change at all - maybe that iterator returns nothing here), terrain overlay, other addons.
+  Leading idea: `SetMapID` resets the canvas (scale 0.6956 = game minimum, view centred, new canvas size) and the game lays tiles/pins out for that state in its own passes, a few frames after our `InstantPanAndZoom` write.
+  **Next steps**: (1) in `/p13` > Map > Zooming untick "Tile-map zoom and pan" (then separately "Seamless map zoom"), /reload, repeat the zoom-out on the painted map - which one stops it?; (2) try making the game re-lay-out after our write.
+- **Diagnostics still in the code (none fixed it; strip before the final version if wanted)**, all in `Features/MapSeamless.lua`: `ns.SyncPlayerPin` / `ns.SyncAllPins` (re-run the pins' `OnCanvasScaleChanged` after we write the scale; called from `SwitchTo` and every zoom frame in MapSheetZoom),
+  a `StartPlayerPing` guard on the player pin (skips pings during/just after our switches), and `/p13 pindebug` (toggle; logs SetPinSize / SetPlayerPingScale / StartPlayerPing / SWITCH / MISMATCH lines around level switches into `P13TweaksDB.pinLog`, saved on /reload - read it from
+  `.../_forever_/WTF/Account/<acct>/SavedVariables/P13Tweaks.lua`). Facts it taught: the player pin is a `GroupMembersPinTemplate` pin; the game sizes the arrow as ~27 / canvasScale and sets the ping scale to ~0.65 / canvasScale on every zoom step.
+- `Options.lua`: `mapSheetZoom` ("Tile-map zoom and pan on the world map") was missing from LAYOUT (so it hid in the Other tab); now first in Map > Zooming. `mapSheet` (the tile-map window) is still unlisted (Other tab).
+- Version is now `0.27.14` in `Version.lua` and both .tocs (the options window shows the .toc/loaded number; a full restart refreshes .toc metadata).
+
 ## v0.27.0 (2026-11-21) - MAP REWORK: tile-map zoom/pan takes over the real world map
 **State when handed over**: the user tested most of this live and said the real-map zoom/pan is "significantly better" than at the start of the session. Still open: some Eastern Kingdoms terrain tiles look wrong,
 and the fly-to (middle-click centring, v0.27.0) was written last and NOT yet tried. New files in both .tocs: `Features/MapSheet.lua`, `Features/MapSheetZoom.lua` (a FULL game restart is needed once).
@@ -37,7 +50,7 @@ Lesson learned the hard way: test switches set with `/run P13TweaksDB.xxx = true
 - Requests: we keep the game's `targetScrollX/Y/targetScale` equal to our own state; a target that differs is someone else's request (middle-click, nav bar...) and we glide there ourselves (PAN_SMOOTH 12). Map id changed (not by us) = `Adopt()` what the game shows.
 - Overlays: after writing, calls `ns.RedrawMapDrawings()` (MapDraw) and `ns.RefreshMapTerrain(false)` in the same frame (their own updates ran before ours = one frame at the old zoom = flicker).
 - Hooks other files use: `ns.sheetZoomActive()`, `ns.OnMapSwitch(old,new,oldScale,newScale)` (carry zoom state across a level switch), `ns.CancelSheetZoom()`, `ns.FlyTo(u,v,finalScale)`.
-- **Fly-to (v0.27.0, untested)**: middle-click (MapCenterKey `FlyToPlayer`) converts the player's position onto the map being viewed (`ns.MapPoint`, any number of levels) and calls `ns.FlyTo`: close = one glide; far (more than 0.8 view widths) = phase 1 zoom out
+- **Fly-to (v0.27.0 design, SUPERSEDED in v0.27.1 by one combined pan+zoom glide - see the v0.27.1 section; the three phases below no longer exist)**: middle-click (MapCenterKey `FlyToPlayer`) converts the player's position onto the map being viewed (`ns.MapPoint`, any number of levels) and calls `ns.FlyTo`: close = one glide; far (more than 0.8 view widths) = phase 1 zoom out
   until the trip fits, phase 2 glide, phase 3 zoom in to the final scale (the middle-click close-up scale, or the old one). Wheel/drag cancel it; level switches convert the destination/zooms. Falls back to the old switch-map-then-glide when conversion fails.
 
 **Map levels follow the view (MapSeamless `CheckMapLevels`, runs after our frame step)**: zone/continent switching is no longer wheel-driven. (1) view 10 % wider than the whole map (`ParentScaleFromChild <= FitScale*0.9`) -> parent, same view;
