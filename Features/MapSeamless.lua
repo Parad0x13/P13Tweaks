@@ -244,52 +244,8 @@ local function ExtendZoomLevels(sc)
     end
 end
 
----------------------------------------------------------------------------
--- Finer zoom: split each of the game's zoom steps into smaller ones
----------------------------------------------------------------------------
-
--- How much one scroll zooms, as a factor (1.25 = 25%), or nil for the game's own steps.
-local function ZoomStepFactor()
-    local pct = tonumber(ns:Get("mapZoomStep"))
-    if pct and pct >= 5 and pct <= 200 then return 1 + pct / 100 end
-end
-
-local function RefineZoomLevels(sc)
-    local factor = ZoomStepFactor()
-    local levels = sc.zoomLevels
-    if not (factor and levels and #levels >= 2) then return end
-    local out = {}
-    for i = 1, #levels - 1 do
-        local a, b = levels[i], levels[i + 1]
-        table.insert(out, a)
-        if a.scale and b.scale and b.scale > a.scale then
-            local n = math.ceil(math.log(b.scale / a.scale) / math.log(factor) - 0.01)
-            local ratio = (b.scale / a.scale) ^ (1 / n)
-            for k = 1, n - 1 do
-                -- in-between steps keep the lower step's art detail until the next real step
-                table.insert(out, { scale = a.scale * ratio ^ k, layerIndex = a.layerIndex })
-            end
-        end
-    end
-    table.insert(out, levels[#levels])
-    wipe(levels)                         -- refill in place: the map keeps a reference to this table
-    for i, level in ipairs(out) do levels[i] = level end
-end
-
--- Extra zoom past the game's closest step: one more step, `pct`% closer (100 = twice as close).
-local function AddExtraZoomIn(sc)
-    local pct = tonumber(ns:Get("mapExtraZoomIn"))
-    local levels = sc.zoomLevels
-    local last = levels and levels[#levels]
-    if not (pct and pct > 0 and last and last.scale) then return end
-    pct = math.min(pct, 1000)
-    table.insert(levels, { scale = last.scale * (1 + pct / 100), layerIndex = last.layerIndex })
-end
-
 local function AdjustZoomLevels(sc)
     ExtendZoomLevels(sc)
-    AddExtraZoomIn(sc)
-    RefineZoomLevels(sc)   -- last, so the extra zoom range gets the same fine steps
 end
 
 ---------------------------------------------------------------------------
@@ -339,12 +295,15 @@ local function TargetChild(sc, mapID)
 end
 
 -- Hand over to `child`, matching scale and position when we know the geometry.
-local function EnterChild(sc, mapID, child)
+local function EnterChild(sc, mapID, child, free)
     local minX, minY, rw, rh = Rect(child, mapID)
     if minX and Art(child) and Art(mapID) then
         local cx, cy = ViewCentre(sc)
-        local x = math.min(math.max((cx - minX) / rw, 0), 1)
-        local y = math.min(math.max((cy - minY) / rh, 0), 1)
+        local x, y = (cx - minX) / rw, (cy - minY) / rh
+        if not free then   -- (a fly-to keeps the view exactly where it is, even if that is outside the zone for now)
+            x = math.min(math.max(x, 0), 1)
+            y = math.min(math.max(y, 0), 1)
+        end
         SwitchTo(child, ChildScaleFromParent(sc:GetCanvasScale(), child, mapID), x, y)
     else
         ns.suppressMapRing = true
@@ -471,6 +430,7 @@ end
 -- view, so there is a gap between the two and it never flips back and forth.
 ---------------------------------------------------------------------------
 
+local checkedMap, checkedX, checkedY, checkedScale, checkedAt = nil, nil, nil, nil, 0
 local glideX, glideY   -- where the view was the last time we looked (to tell whether it's moving)
 local function CheckMapLevels(sc)
     if not (ns:Get("mapSeamless") and WorldMapFrame:IsShown()) then return end
@@ -489,11 +449,23 @@ local function CheckMapLevels(sc)
     -- (only if the view is really moving: a target it can't reach mustn't block this for good)
     local moving = glideX and (math.abs(cx - glideX) > 0.0003 or math.abs(cy - glideY) > 0.0003)
     glideX, glideY = cx, cy
-    if moving and sc.targetScrollX and (math.abs(sc.targetScrollX - cx) > 0.003 or math.abs((sc.targetScrollY or cy) - cy) > 0.003) then return end
+    -- (a fly-to is the exception: it keeps its own pan target far from the view the whole way, and waiting for
+    -- that to arrive held the hand-over back until the flight had already ended short of the close-up)
+    local flyU, flyV
+    if ns.SheetZoomFlying then flyU, flyV = ns.SheetZoomFlying() end
+    local flying = flyU ~= nil
+    if moving and not flying and sc.targetScrollX and (math.abs(sc.targetScrollX - cx) > 0.003 or math.abs((sc.targetScrollY or cy) - cy) > 0.003) then return end
     if sc.targetScale and math.abs(sc.targetScale - scale) > scale * 0.002 then return end
+    -- Nothing moved since the last full check (and that check switched nothing): skip the map-info
+    -- lookups below, which are the costly part. Look again twice a second anyway.
+    local now = GetTime()
+    if mapID == checkedMap and cx == checkedX and cy == checkedY and scale == checkedScale and now - checkedAt < 0.5 then return end
+    checkedMap, checkedX, checkedY, checkedScale, checkedAt = mapID, cx, cy, scale, now
     local parent = info.parentMapID
 
-    if parent and parent ~= 0 and info.mapType >= 2 then
+    -- (a fly-to only ever goes down: going up or sideways on the way to a spot would be hitches and
+    -- conversions for nothing, and a zone is entered as soon as the destination's zone fills the view)
+    if parent and parent ~= 0 and info.mapType >= 2 and not flying then
         local minX, minY, rw, rh = Rect(mapID, parent)
         if minX and Art(mapID) and Art(parent) then
             local pScale = ParentScaleFromChild(scale, mapID, parent)
@@ -522,11 +494,12 @@ local function CheckMapLevels(sc)
 
     -- 3. a map below this one fills the view
     if info.mapType <= 2 then
-        local child = ChildAt(mapID, cx, cy)
+        -- (flying: the zone of the DESTINATION, not whatever the view happens to be over on the way)
+        local child = ChildAt(mapID, flyU or cx, flyV or cy)
         local fit = child and FitScale(child, mapID)
         if fit and scale >= fit * 0.98 then
             Trace(("LEVEL down %s -> %s  (scale %.4f, fit %.4f)"):format(mapID, child, scale, fit))
-            EnterChild(sc, mapID, child)
+            EnterChild(sc, mapID, child, flying)
         end
     end
 end
@@ -626,42 +599,16 @@ ns:RegisterOption({
     end,
 })
 
-ns:RegisterOption({
-    key = "mapZoomStep",
-    type = "text",
-    label = "Map zoom per scroll (%), blank = game default",
-    tooltip = "How much each mouse-wheel scroll zooms the map. Smaller = finer control, e.g. 15. Any number from 5 to 200; leave blank for the game's own big steps. Press Enter to save.",
-    default = "20",
-    maxLetters = 3,
-    onChange = function()
-        local sc = WorldMapFrame and WorldMapFrame.ScrollContainer
-        -- sc.mapID, not WorldMapFrame's: a fresh character's scroll area may have no map yet
-        -- (the new zoom then applies when the map next loads)
-        if sc and sc.CreateZoomLevels and sc.mapID then sc:CreateZoomLevels() end
-    end,
-})
-
-ns:RegisterOption({
-    key = "mapExtraZoomIn",
-    type = "text",
-    label = "Extra map zoom-in (%), 0 = none",
-    tooltip = "Lets you zoom in past the game's closest zoom. 100 = twice as close as normal, 200 = three times. Any number from 0 to 1000. Press Enter to save.",
-    default = "0",
-    maxLetters = 4,
-    onChange = function()
-        local sc = WorldMapFrame and WorldMapFrame.ScrollContainer
-        -- sc.mapID, not WorldMapFrame's: a fresh character's scroll area may have no map yet
-        -- (the new zoom then applies when the map next loads)
-        if sc and sc.CreateZoomLevels and sc.mapID then sc:CreateZoomLevels() end
-    end,
-})
-
 local watcher = CreateFrame("Frame")
 watcher:RegisterEvent("PLAYER_LOGIN")
 watcher:SetScript("OnEvent", function()
     -- tidy up settings from the older jump-up-a-map options this replaces
     P13TweaksDB.mapZoomOutParent, P13TweaksDB.mapParentCentre, P13TweaksDB.mapZoomOutCentre = nil, nil, nil
     P13TweaksDB.mapDebugTrace, P13TweaksDB.mapDebugCalls = nil, nil   -- each session's debug trace starts fresh
+    -- The debug switch was saved between sessions: left on, it formatted trace lines every frame and its log
+    -- grew without limit (hundreds of KB in the saved file), so the map got slower the longer it was used.
+    -- Session-only now (turn it on with /run P13TweaksDB.mapDebug = true when needed).
+    P13TweaksDB.mapDebug, P13TweaksDB.mapDebugLog, P13TweaksDB.mapDebugTiles, P13TweaksDB.mapDebugFuncs = nil, nil, nil, nil
     -- Test switches from earlier versions were saved between sessions and silently kept the new
     -- edge room (and the other fixes) switched off. They are session-only now: always clear them.
     P13TweaksDB.mapNoEdgeRoom, P13TweaksDB.mapNoSteer, P13TweaksDB.mapNoHold = nil, nil, nil
@@ -670,24 +617,6 @@ watcher:SetScript("OnEvent", function()
     if not (sc and sc.InstantPanAndZoom and sc.GetNormalizedHorizontalScroll) then return end
     sc:HookScript("OnMouseWheel", OnWheel)
 
-    if P13TweaksDB and P13TweaksDB.mapDebug then
-        -- list the map scroll area's methods and fields, to find what limits the view's position
-        local names = {}
-        local mt = getmetatable(sc)
-        local idx = mt and type(mt.__index) == "table" and mt.__index
-        for k, v in pairs(idx or {}) do
-            if type(k) == "string" and (k:find("Extent") or k:find("Scroll") or k:find("Pan") or k:find("Zoom") or k:find("Clamp") or k:find("Update")) then
-                names[#names + 1] = k .. " (" .. type(v) .. ")"
-            end
-        end
-        for k, v in pairs(sc) do
-            if type(k) == "string" and (k:find("xtent") or k:find("target") or k:find("Target") or k:find("zoom") or k:find("scroll")) then
-                names[#names + 1] = "field " .. k .. " = " .. tostring(v)
-            end
-        end
-        table.sort(names)
-        P13TweaksDB.mapDebugFuncs = names
-    end
     if sc.CreateZoomLevels then hooksecurefunc(sc, "CreateZoomLevels", AdjustZoomLevels) end
 
     -- Watch the zoom while the map is open, to hand over to a zone once it fills the view.
@@ -695,27 +624,11 @@ watcher:SetScript("OnEvent", function()
     poll:SetScript("OnUpdate", function()
         prevTargetScale = sc.targetScale or sc:GetCanvasScale()
         WidenLimits(sc)
-        if P13TweaksDB and P13TweaksDB.mapDebug and GetTime() - lastWheelAny < 2 then
-            -- after a scroll, a line whenever the view, zoom or limits change; a jump of the view's
-            -- centre of more than 0.02 in one frame is marked "SNAP"
-            local vx, vy = sc:GetNormalizedHorizontalScroll(), sc:GetNormalizedVerticalScroll()
-            local snap = ns.lastViewX and (math.abs(vx - ns.lastViewX) > 0.02 or math.abs(vy - ns.lastViewY) > 0.02)
-            ns.lastViewX, ns.lastViewY = vx, vy
-            local body = ("map %s scale %.4f->%.4f  view %.3f,%.3f -> %s,%s  ext x %s..%s y %s..%s  %s"):format(
-                tostring(WorldMapFrame:GetMapID()), sc:GetCanvasScale(), sc.targetScale or -1, vx, vy,
-                sc.targetScrollX and ("%.3f"):format(sc.targetScrollX) or "?",
-                sc.targetScrollY and ("%.3f"):format(sc.targetScrollY) or "?",
-                sc.scrollXExtentsMin and ("%.3f"):format(sc.scrollXExtentsMin) or "?",
-                sc.scrollXExtentsMax and ("%.3f"):format(sc.scrollXExtentsMax) or "?",
-                sc.scrollYExtentsMin and ("%.3f"):format(sc.scrollYExtentsMin) or "?",
-                sc.scrollYExtentsMax and ("%.3f"):format(sc.scrollYExtentsMax) or "?", MouseText(sc))
-            if body ~= ns.lastTraceBody or snap then
-                ns.lastTraceBody = body
-                Trace((snap and "SNAP " or "     ") .. body)
-            end
-        end
+        -- the wheel-driven hand-overs below are only for the game's own zoom; the tile-map zoom
+        -- switches levels by the view instead (CheckMapLevels)
+        if ns.sheetZoomActive and ns.sheetZoomActive() then return end
         CheckZoomIn()
-        if not (ns.sheetZoomActive and ns.sheetZoomActive()) then CheckEdgePush(sc) end   -- the tile-map zoom switches levels by the view instead
+        CheckEdgePush(sc)
         preX, preY = ViewCentre(sc)
     end)
 end)

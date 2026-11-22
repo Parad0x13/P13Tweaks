@@ -286,7 +286,7 @@ events:SetScript("OnEvent", function()
         worldLayer:SetPoint("TOPLEFT", sc.Child, "TOPLEFT")
         worldLayer:SetFrameLevel(sc.Child:GetFrameLevel() + 16)
         local poll = CreateFrame("Frame", nil, WorldMapFrame)
-        poll:SetScript("OnUpdate", function() PlaceWorldIcons(false) end)
+        poll:SetScript("OnUpdate", function() if ns.layersStamp ~= GetTime() then PlaceWorldIcons(false) end end)
         ns.AddMapLayerRefresh(function() PlaceWorldIcons(false) end)
         poll:SetScript("OnShow", function() PlaceWorldIcons(true) end)
     end

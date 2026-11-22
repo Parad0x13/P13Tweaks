@@ -411,9 +411,10 @@ local function Hook(view, cx, cy, zoom, w, h, world)
         if not SameQuests(now, quests) then quests = now; version = version + 1 end
     end
 
-    local sig = ("%d:%.4f:%.4f:%.3f:%d:%d:%s:%s"):format(version, cx, cy, zoom, w or 0, h or 0, tostring(world), tostring(On()))
-    if sig == lastSig then return end
-    lastSig = sig
+    local st = lastSig
+    if not st then st = {}; lastSig = st end
+    if ns.SigSame(st, version, math.floor(cx * 1e4), math.floor(cy * 1e4), math.floor(zoom * 1e3),
+        math.floor(w or 0), math.floor(h or 0), world or false, On() and true or false) then return end
 
     for i = 1, discsUsed do discs[i]:Hide() end
     for i = 1, iconsUsed do icons[i]:Hide() end

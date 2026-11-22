@@ -89,7 +89,7 @@ ns:RegisterOption({
     type = "toggle",
     label = "Hide the map window's gold border when maximized",
     tooltip = "When the map window is maximized, hides the decorative border around it (its title, buttons and background stay). The normal-sized window keeps its border.",
-    default = true,
+    default = false,
     onChange = function() ApplyBorder() end,
 })
 

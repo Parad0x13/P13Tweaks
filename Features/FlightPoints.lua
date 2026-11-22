@@ -213,9 +213,9 @@ local function Place(force)
     local mapID = WorldMapFrame:GetMapID()
     local scale, W, H = sc:GetCanvasScale(), child:GetWidth(), child:GetHeight()
     if not (mapID and scale and scale > 0 and scale < math.huge and W and W > 0 and H and H > 0) then return end
-    local sig = ("%d:%.5f:%.1f:%.1f"):format(mapID, scale, W, H)
-    if sig == lastPlaced and not force then return end
-    lastPlaced = sig
+    local st = lastPlaced
+    if not st then st = {}; lastPlaced = st end
+    if ns.SigSame(st, mapID, math.floor(scale * 1e5), math.floor(W * 10), math.floor(H * 10)) and not force then return end
 
     pinLayer:SetScale(1 / scale)
     pinLayer:SetSize(W * scale, H * scale)
@@ -240,7 +240,7 @@ local function EnsureLayer()
     pinLayer:SetPoint("TOPLEFT", sc.Child, "TOPLEFT")
     pinLayer:SetFrameLevel(sc.Child:GetFrameLevel() + 20)   -- above the terrain
     local poll = CreateFrame("Frame", nil, WorldMapFrame)
-    poll:SetScript("OnUpdate", function() Place(false) end)
+    poll:SetScript("OnUpdate", function() if ns.layersStamp ~= GetTime() then Place(false) end end)
     ns.AddMapLayerRefresh(function() Place(false) end)   -- also re-placed in the same frame as a zoom / level switch
     return pinLayer
 end

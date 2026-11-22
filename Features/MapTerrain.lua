@@ -25,6 +25,7 @@ local spare = {}      -- released textures, for reuse
 local labels = {}     -- pooled zone-name font strings
 local boundsCache = {} -- mapID -> { continent, top, left, bottom, right } or false
 local lastSig
+local lastRehide = 0
 
 local function Enabled() return ns:Get("mapTerrain") end
 
@@ -336,15 +337,27 @@ local function Refresh(force)
         if not (scale and scale > 0 and scale < math.huge and W and W > 0) then return end
     end
 
-    local sig = b and ("%d:%.4f:%.4f:%.4f:%.0f:%.0f:%.2f:%s:%.4f:%.4f:%.4f"):format(mapID, sc:GetCanvasScale(),
-        sc:GetNormalizedHorizontalScroll(), sc:GetNormalizedVerticalScroll(),
-        child:GetWidth(), child:GetHeight(), Alpha(), tostring(ns:Get("mapTerrainLabels")),
-        sc.targetScale or 0, sc.targetScrollX or 0, sc.targetScrollY or 0) or "off"
-    if sig == lastSig and not force then
-        if b then SetPaintedShown(false) end  -- the map may have re-made them; cheap
+    local st = lastSig
+    if not st then st = {}; lastSig = st end
+    local same
+    if b then
+        same = ns.SigSame(st, mapID, math.floor(sc:GetCanvasScale() * 1e4),
+            math.floor(sc:GetNormalizedHorizontalScroll() * 1e4), math.floor(sc:GetNormalizedVerticalScroll() * 1e4),
+            math.floor(child:GetWidth()), math.floor(child:GetHeight()), math.floor(Alpha() * 100),
+            ns:Get("mapTerrainLabels") and true or false,
+            math.floor((sc.targetScale or 0) * 1e4), math.floor((sc.targetScrollX or 0) * 1e4), math.floor((sc.targetScrollY or 0) * 1e4))
+    else
+        same = ns.SigSame(st, false)
+    end
+    if same and not force then
+        -- the map may have re-made its pieces: look again a few times a second (a new map changes the
+        -- signature above, which takes the full path at once)
+        if b then
+            local now = GetTime()
+            if now - lastRehide >= 0.2 then lastRehide = now; SetPaintedShown(false) end
+        end
         return
     end
-    lastSig = sig
 
     if not b then
         ReleaseAll()

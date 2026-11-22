@@ -438,9 +438,10 @@ local function Redraw(force)
     local mapID = WorldMapFrame:GetMapID()
     local scale, W, H = sc:GetCanvasScale(), child:GetWidth(), child:GetHeight()
     if not (mapID and scale and scale > 0 and scale < math.huge and W and W > 0) then return end
-    local sig = ("%d:%d:%.5f:%.0f:%d:%s"):format(version, mapID, scale, W, math.floor(GetTime() / 3), tostring(On()))
-    if sig == lastSig and not force then return end
-    lastSig = sig
+    local st = lastSig
+    if not st then st = {}; lastSig = st end
+    if ns.SigSame(st, version, mapID, math.floor(scale * 1e5), math.floor(W), math.floor(GetTime() / 3),
+        On() and true or false) and not force then return end
 
     for i = 1, linesUsed do linePool[i]:Hide() end
     linesUsed = 0

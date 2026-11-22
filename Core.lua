@@ -28,6 +28,21 @@ function ns:RegisterOption(def)
     table.insert(self.options, def)
 end
 
+-- Per-frame "has anything changed?" check without building a string (a signature string made every
+-- frame by several map layers was a steady stream of garbage). `store` is a table the caller keeps;
+-- returns true when every value equals what the last call stored. Pass numbers pre-rounded
+-- (math.floor(x * 1e5)) where tiny differences should not count.
+function ns.SigSame(store, ...)
+    local n = select("#", ...)
+    local same = store.n == n
+    for i = 1, n do
+        local v = select(i, ...)
+        if store[i] ~= v then same = false; store[i] = v end
+    end
+    store.n = n
+    return same
+end
+
 function ns:Get(key)
     return P13TweaksDB[key]
 end
@@ -115,6 +130,7 @@ end
 local layerRefreshers = {}
 function ns.AddMapLayerRefresh(fn) layerRefreshers[#layerRefreshers + 1] = fn end
 function ns.RefreshMapLayers()
+    ns.layersStamp = GetTime()   -- (a layer's own per-frame check can skip itself if this already ran this frame)
     for i = 1, #layerRefreshers do pcall(layerRefreshers[i]) end
 end
 

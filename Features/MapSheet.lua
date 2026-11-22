@@ -217,11 +217,11 @@ local function DrawLines()
     if not (sd and drawLayer) then return end
     local on = sd.enabled()
     local w, h = view:GetWidth(), view:GetHeight()
-    local sig = ("%d:%.4f:%.4f:%.3f:%d:%d:%s:%s"):format(sd.version(), cx, cy, zoom, w or 0, h or 0, tostring(world), tostring(on))
     -- (lines fade over time: look again every few seconds even when nothing moved)
-    sig = sig .. ":" .. math.floor(GetTime() / 3)
-    if sig == lastDrawSig then return end
-    lastDrawSig = sig
+    local st = lastDrawSig
+    if not st then st = {}; lastDrawSig = st end
+    if ns.SigSame(st, sd.version(), math.floor(cx * 1e4), math.floor(cy * 1e4), math.floor(zoom * 1e3),
+        math.floor(w or 0), math.floor(h or 0), world or false, on and true or false, math.floor(GetTime() / 3)) then return end
 
     for i = 1, linesUsed do linePool[i]:Hide() end
     linesUsed = 0

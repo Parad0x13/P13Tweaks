@@ -177,10 +177,10 @@ local function Redraw(force)
     local mapID = WorldMapFrame:GetMapID()
     local scale, W, H = sc:GetCanvasScale(), child:GetWidth(), child:GetHeight()
     if not (mapID and scale and scale > 0 and scale < math.huge and W and W > 0) then return end
-    local sig = ("%d:%.5f:%.0f:%d:%s:%s"):format(mapID, scale, W, math.floor(GetTime() / 3),
-        tostring(On()), tostring(ns:Get("mapQuestHintsHas")))
-    if sig == lastSig and not force then return end
-    lastSig = sig
+    local st = lastSig
+    if not st then st = {}; lastSig = st end
+    if ns.SigSame(st, mapID, math.floor(scale * 1e5), math.floor(W), math.floor(GetTime() / 3),
+        On() and true or false, ns:Get("mapQuestHintsHas") and true or false) and not force then return end
 
     for i = 1, used do pool[i]:Hide() end
     used = 0
@@ -281,7 +281,7 @@ events:SetScript("OnEvent", function()
     ns:AddMapButton(button, 36)
 
     local poll = CreateFrame("Frame", nil, WorldMapFrame)
-    poll:SetScript("OnUpdate", function() Redraw(false) end)
+    poll:SetScript("OnUpdate", function() if ns.layersStamp ~= GetTime() then Redraw(false) end end)
     ns.AddMapLayerRefresh(function() Redraw(false) end)
     poll:SetScript("OnShow", function() hintsAt = 0; Redraw(true) end)
 end)

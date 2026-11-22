@@ -317,10 +317,10 @@ local function Draw(force)
     local scale, W, H = sc:GetCanvasScale(), child:GetWidth(), child:GetHeight()
     if not (mapID and scale and scale > 0 and scale < math.huge and W and W > 0) then return end
     local X, Y = PlayerWorld()
-    local sig = ("%s:%d:%.5f:%.0f:%s:%s"):format(tostring(route), mapID, scale, W,
-        X and math.floor(X / 4) or "-", Y and math.floor(Y / 4) or "-")
-    if sig == lastSig and not force then return end
-    lastSig = sig
+    local st = lastSig
+    if not st then st = {}; lastSig = st end
+    if ns.SigSame(st, route or false, mapID, math.floor(scale * 1e5), math.floor(W),
+        X and math.floor(X / 4) or false, Y and math.floor(Y / 4) or false) and not force then return end
 
     for i = 1, linesUsed do linePool[i]:Hide() end
     linesUsed = 0
@@ -432,15 +432,19 @@ events:SetScript("OnEvent", function(_, event)
 
         -- While our route owns the game's waypoint, hide its map pin: the star marks the spot
         -- (and the pin would catch the double-click meant for the star). The arrow stays.
+        local lastPinCheck = 0
         local function HideGamePin()
             if not (route and ourPoint and WorldMapFrame.EnumeratePinsByTemplate) then return end
+            local now = GetTime()
+            if now - lastPinCheck < 0.1 then return end   -- the game re-shows it rarely; 10 times a second is plenty
+            lastPinCheck = now
             for pin in WorldMapFrame:EnumeratePinsByTemplate("WaypointLocationPinTemplate") do
                 if pin:IsShown() then pin:Hide() end
             end
         end
 
         local poll = CreateFrame("Frame", nil, WorldMapFrame)
-        poll:SetScript("OnUpdate", function() HideGamePin(); Draw(false) end)
+        poll:SetScript("OnUpdate", function() HideGamePin(); if ns.layersStamp ~= GetTime() then Draw(false) end end)
         ns.AddMapLayerRefresh(function() Draw(false) end)
         poll:SetScript("OnShow", function() Draw(true) end)
     elseif route then

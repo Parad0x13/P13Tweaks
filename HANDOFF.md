@@ -1,4 +1,26 @@
-# P13Tweaks – Handoff (2026-11-22, v0.30.7)
+# P13Tweaks – Handoff (2026-11-22, v0.30.26)
+
+## v0.30.8 - v0.30.26 (2026-11-22) - map zoom/centring rework, perf pass, debug switch fixed
+Nothing here was run by a Lua interpreter (none on this PC); the user tested in game and reported. Debug traces are read from `.../_forever_/WTF/Account/69863589#1/SavedVariables/P13Tweaks.lua` (`mapDebugTrace`) after the user `/reload`s.
+
+**The lag that grew with use was the saved debug switch**: `mapDebug = true` had been saved between sessions, so trace lines were formatted every frame and `mapDebugLog` grew without limit (650 KB). `mapDebug` (+ Log/Tiles/Funcs) is now SESSION-ONLY: cleared at login in MapSeamless.lua. Turn it on for one session with `/run P13TweaksDB.mapDebug = true`, reproduce, `/reload`, read the trace. The two big debug blocks in MapSeamless's poll were removed.
+
+**Options (Map > Zooming)**: removed `mapZoomSmooth`, `mapZoomStep` (wheel zoom is a fixed 40% per notch = `ZoomStep()` 1.4, glide rate fixed 10.5/s, eased in LOG space) and the old game-zoom-level versions of zoom step / extra zoom (MapSeamless RefineZoomLevels/AddExtraZoomIn deleted). `mapExtraZoomIn` is back and now works with the tile-map zoom (raises `Limits()` hi in MapSheetZoom.lua). Saved keys cleared at login. `mapBorderHide` (gold border when maximized) default now OFF (border shown).
+
+**Perf pass**: `ns.SigSame(store, ...)` in Core.lua replaces per-frame signature STRINGS in MapQuestHints, MapDraw, MapRoute, FlightPoints, MapTerrain, MapSheet, MapSheetQuests. `ns.RefreshMapLayers()` stamps `ns.layersStamp`; the layers' own OnUpdate checks skip if it already ran this frame. MapSheetZoom skips the three redraw calls when the view is at rest (`wrote` flag). MapTerrain re-hides the painted map at most 5x/s when unchanged. CheckMapLevels has a same-view early-out (0.5s) and HideGamePin runs 10x/s.
+
+**Tile-map zoom (MapSheetZoom.lua) fixes - all found from traces**
+- Stale game zoom target pulled finished zooms back out: `sc.targetScale = ownS` is synced EVERY frame; a zoom request only counts when `goalS == ownS`.
+- Pan requests are no longer detected by comparing the game's pan target with the view (the game clamps/re-clamps targets, which looked like a request and slid the view off after a centre-on-me). Now `HookPanTarget()` hooks `SetPanTarget`; calls made while `ours` (via `PutPanTarget`) are ignored, any other call sets `pendX/pendY`, consumed as a request in Frame. Pending is cleared on drag, mouse release, map switch (`OnMapSwitch`), Adopt, and the 0.5s after a switch.
+- `Limits()`: on a zone/continent that has a parent (seamless on) the zoom-out floor is 0.25x of min (was 0.8x) so notches between the map's own limit and the hand-over are not thrown away (the wheel "stall" while zooming out).
+
+**Centre on me (MapCenterKey.lua + MapSheetZoom FlyTo + MapSeamless CheckMapLevels)**
+- Level switches are allowed DURING a fly-to but only DOWN, chosen by the flight's DESTINATION (`ns.SheetZoomFlying()` returns tu,tv), view not clamped into the child (`EnterChild(..., free)`); the "wait until the glide has arrived" gate and up/sideways switches are skipped while flying.
+- Close-up is the same everywhere: `CloseScaleOn(sc, cur, playerMap)` = the 800-yard view of the player's own map expressed on the map being shown (NO map cap; `FlyTo` clamps with `Limits()` incl. extra zoom-in). On each hand-over `OnMapSwitch` retargets `fly.finalS` via `ns.CloseViewScale(newMap)` (uncapped, then `Limits()`). World map (no world coords): aims for `hi` until a hand-over retargets. Fixed: stopping short, zooming back out after arriving, two different close-up sizes.
+- Trace lines added: `FLY retarget ...`, `FLY arrived ...`.
+
+**Unconfirmed (user to test)**: last fix (same close-up from every start map incl. extra zoom-in), the SetPanTarget-hook request detection (check nav bar + drag still work), the perf idle-skips (if a layer lags behind at rest, loosen). 
+
 
 ## v0.27.50 - v0.30.7 (2026-11-22) - real-map polish: flicker SOLVED, tiles from the client, drawing features, window options
 Nothing here was run by a Lua interpreter (none on this PC); the user tested in game and reported. New files in BOTH .tocs (full game restart needed once): `Features/MapDrawMinimap.lua`, `Features/MapFrameDrag.lua`. New repo tool: `tools/gen_terrain_data.py`.
