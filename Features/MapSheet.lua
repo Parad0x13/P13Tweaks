@@ -498,7 +498,7 @@ ns:RegisterOption({
     type = "toggle",
     label = "Tilesheet world map (Tile map button on the map, /p13 sheet)",
     tooltip = "A world map of our own: the whole continent as one continuous sheet of terrain tiles. Mouse wheel zooms smoothly around the cursor, drag to pan, middle-click centres on you. Prototype: uses a lot of memory when zoomed out.",
-    default = true,
+    default = false,
     onChange = function(v)
         if not v and frame then frame:Hide() end
         if ns.sheetButton then ns.sheetButton:SetShown(v and true or false) end

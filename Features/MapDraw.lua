@@ -509,6 +509,7 @@ end
 -- The mouse catcher over the map is active while Draw is on, while Shift is held (hold Shift and drag
 -- to draw without the button), and while a stroke is still being drawn.
 local shiftHeld = false
+local altHeld = false       -- Alt held over the map: the eraser (see below)
 local passRight
 local function RefreshCatcher()
     if not catcher then return end
@@ -519,7 +520,7 @@ local function RefreshCatcher()
         passRight = wantPass
         if wantPass then pcall(catcher.SetPassThroughButtons, catcher, "RightButton") else pcall(catcher.SetPassThroughButtons, catcher) end
     end
-    local active = On() and (drawing or shiftHeld or current ~= nil) and true or false
+    local active = On() and (drawing or shiftHeld or altHeld or current ~= nil) and true or false
     if catcher:IsShown() ~= active then catcher:SetShown(active) end
     catcher:EnableMouse(active)
 end
@@ -678,6 +679,174 @@ local function SetDrawing(on)
     drawing = on
     RefreshCatcher()
     UpdateButtons()
+end
+
+---------------------------------------------------------------------------
+-- Eraser: hold Alt and drag with the left button over your lines. Everything of your lines inside a circle
+-- around the cursor is cut out, so a line splits into pieces (or shrinks, or goes). Only your own lines.
+-- When you let go, the old lines are withdrawn from the group and the pieces are sent as new lines.
+---------------------------------------------------------------------------
+
+-- Eraser radius, in the map pane's own pixels (the same units the lines are drawn in). Alt + mouse wheel
+-- changes it; it is saved between sessions.
+local ERASE_MIN, ERASE_MAX, ERASE_DEFAULT = 4, 60, 12
+local function EraserPx()
+    local r = tonumber(P13TweaksDB and P13TweaksDB.mapDrawEraser) or ERASE_DEFAULT
+    return math.max(ERASE_MIN, math.min(ERASE_MAX, r))
+end
+
+function ns.EraserWheel(delta)
+    local r = EraserPx()
+    local new = math.floor(r * (delta > 0 and 1.2 or 1 / 1.2) + 0.5)
+    if new == r then new = r + (delta > 0 and 1 or -1) end   -- (small sizes: always move at least a pixel)
+    P13TweaksDB.mapDrawEraser = math.max(ERASE_MIN, math.min(ERASE_MAX, new))
+end
+
+local erasing = false        -- the left button is down and we are cutting
+local erasedIds = {}         -- ids of lines cut during this drag (to withdraw from the group at the end)
+local eraserDot              -- the circle that follows the cursor while Alt is held
+
+-- The pieces of a line (points {u, v}) left after cutting out the ellipse around (cu, cv) with radii (ru, rv)
+-- (an ellipse because map units are not the same size across and down). Returns nil if the line is untouched,
+-- otherwise a list of point lists (possibly empty = the whole line was erased).
+local function ErasePieces(pts, cu, cv, ru, rv)
+    local n = #pts
+    if n < 2 or ru <= 0 or rv <= 0 then return nil end
+    local P = {}
+    for i = 1, n do P[i] = { (pts[i][1] - cu) / ru, (pts[i][2] - cv) / rv } end   -- (the eraser is the unit circle here)
+    local pieces, cur, changed = {}, nil, false
+    local function Close()
+        if cur and #cur >= 2 then pieces[#pieces + 1] = cur end
+        cur = nil
+    end
+    local function Back(q) return { cu + q[1] * ru, cv + q[2] * rv } end
+    for i = 1, n - 1 do
+        local a, b = P[i], P[i + 1]
+        local dx, dy = b[1] - a[1], b[2] - a[2]
+        local A = dx * dx + dy * dy
+        local lo, hi
+        if A > 1e-12 then
+            local B = 2 * (a[1] * dx + a[2] * dy)
+            local C = a[1] * a[1] + a[2] * a[2] - 1
+            local disc = B * B - 4 * A * C
+            if disc > 0 then
+                local sq = math.sqrt(disc)
+                lo, hi = math.max(0, (-B - sq) / (2 * A)), math.min(1, (-B + sq) / (2 * A))
+                if lo >= hi then lo = nil end
+            end
+        elseif a[1] * a[1] + a[2] * a[2] < 1 then
+            lo, hi = 0, 1
+        end
+        if not lo then
+            if not cur then cur = { pts[i] } end
+            cur[#cur + 1] = pts[i + 1]
+        else
+            changed = true
+            if lo > 0 then   -- the part before the circle stays, up to where the segment enters it
+                if not cur then cur = { pts[i] } end
+                cur[#cur + 1] = Back({ a[1] + dx * lo, a[2] + dy * lo })
+            end
+            Close()
+            if hi < 1 then   -- and a new piece starts where it leaves the circle
+                cur = { Back({ a[1] + dx * hi, a[2] + dy * hi }), pts[i + 1] }
+            end
+        end
+    end
+    Close()
+    if not changed then return nil end
+    return pieces
+end
+
+-- Cut the eraser circle at map position (cu, cv) out of each of my lines.
+local function EraseAt(cu, cv)
+    local sc = WorldMapFrame.ScrollContainer
+    local scale = sc:GetCanvasScale()
+    local pxU, pxV = sc.Child:GetWidth() * scale, sc.Child:GetHeight() * scale
+    if not (pxU > 0 and pxV > 0 and pxU < math.huge) then return end
+    local viewMap = WorldMapFrame:GetMapID()
+    local px = EraserPx()
+    local ru, rv = px / pxU, px / pxV
+    for i = #strokes, 1, -1 do
+        local s = strokes[i]
+        if s.owner == Me() and not s.demo and s ~= current then
+            -- the eraser's centre and radii on the map this line was drawn on (a related map when you have zoomed in/out)
+            local mu, mv, mru, mrv = cu, cv, ru, rv
+            if s.map ~= viewMap then
+                mu = nil
+                if ns.MapPoint then   -- (not "ns.MapPoint and ns.MapPoint(...)": that keeps only the first value)
+                    local c1, c2 = ns.MapPoint(viewMap, s.map, cu, cv)
+                    local a1 = ns.MapPoint(viewMap, s.map, cu + ru, cv)
+                    local _, b2 = ns.MapPoint(viewMap, s.map, cu, cv + rv)
+                    if c1 and c2 and a1 and b2 then
+                        mu, mv, mru, mrv = c1, c2, math.abs(a1 - c1), math.abs(b2 - c2)
+                    end
+                end
+            end
+            local pieces = mu and ErasePieces(s.pts, mu, mv, mru, mrv)
+            if pieces then
+                if not s.p13dirty and s.id and s.id > 0 then erasedIds[#erasedIds + 1] = s.id end
+                table.remove(strokes, i)
+                for k = #pieces, 1, -1 do   -- the pieces take the old line's place, in order
+                    table.insert(strokes, i, { owner = s.owner, id = 0, map = s.map, color = s.color, pts = pieces[k],
+                        t = s.t, th = s.th, p13dirty = true })
+                end
+                Changed()
+            end
+        end
+    end
+end
+
+-- Done cutting: tell the group (withdraw the old lines, send the pieces as new lines).
+local function FinishErase()
+    erasing = false
+    local any = #erasedIds > 0
+    for _, id in ipairs(erasedIds) do Send("U^" .. id) end
+    erasedIds = {}
+    for _, s in ipairs(strokes) do
+        if s.p13dirty then
+            s.p13dirty = nil
+            nextId = nextId + 1
+            s.id = nextId
+            SendStroke(s)
+            any = true
+        end
+    end
+    if any then Changed() end
+end
+
+local function SetupEraser(sc)
+    eraserDot = MakeDot(catcher)
+    eraserDot:SetDrawLayer("OVERLAY", 7)
+    eraserDot:SetSize(EraserPx() * 2, EraserPx() * 2)
+    eraserDot:SetColorTexture(1, 1, 1, 0.3)
+    eraserDot:Hide()
+    local f = CreateFrame("Frame", nil, WorldMapFrame)
+    f:SetScript("OnUpdate", function()
+        if not (altHeld and not shiftHeld) then
+            if erasing then FinishErase() end
+            if eraserDot:IsShown() then eraserDot:Hide() end
+            return
+        end
+        local cu, cv = CursorOnMap()
+        if not cu then
+            if eraserDot:IsShown() then eraserDot:Hide() end
+            if erasing and not IsMouseButtonDown("LeftButton") then FinishErase() end
+            return
+        end
+        -- the circle follows the cursor (and shows the current size)
+        eraserDot:SetSize(EraserPx() * 2, EraserPx() * 2)
+        local es = sc:GetEffectiveScale()
+        local x, y = GetCursorPosition()
+        eraserDot:ClearAllPoints()
+        eraserDot:SetPoint("CENTER", sc, "BOTTOMLEFT", x / es - sc:GetLeft(), y / es - sc:GetBottom())
+        eraserDot:Show()
+        if IsMouseButtonDown("LeftButton") then
+            erasing = true
+            EraseAt(cu, cv)
+        elseif erasing then
+            FinishErase()
+        end
+    end)
 end
 
 ---------------------------------------------------------------------------
@@ -882,6 +1051,18 @@ ns:RegisterOption({
 })
 
 ns:RegisterOption({
+    key = "mapDrawErase",
+    type = "toggle",
+    label = "Eraser: hold Alt and drag over your lines",
+    tooltip = "Hold Alt on the world map and drag with the left mouse button over your lines to cut the part under the circle out of them: a line shrinks, splits in two, or goes. Only your own lines. Your group sees the change when you let go. While Alt is held, dragging erases instead of panning the map, and the mouse wheel makes the eraser bigger or smaller (it remembers its size).",
+    default = true,
+    onChange = function(on)
+        altHeld = on and IsAltKeyDown() and WorldMapFrame and WorldMapFrame:IsShown() and true or false
+        RefreshCatcher()
+    end,
+})
+
+ns:RegisterOption({
     key = "mapDrawPicker",
     type = "toggle",
     label = "Colour ring: Shift + hold right button on the map",
@@ -953,6 +1134,60 @@ end)
 -- Setup
 ---------------------------------------------------------------------------
 
+---------------------------------------------------------------------------
+-- Keeping your lines through /reload and logout
+---------------------------------------------------------------------------
+-- Only YOUR lines are saved (per character). Your group's lines come back by themselves: when you rejoin the
+-- group view after a reload everybody's addon sends its lines again, and a re-sent line replaces its old copy.
+-- Points are saved at full precision (the 12-bit network form is too coarse when zoomed far in).
+
+local function CharKey() return (UnitName("player") or "?") .. "-" .. (GetRealmName() or "?") end
+
+local function SaveStrokes()
+    P13TweaksDB.mapDrawSaved = P13TweaksDB.mapDrawSaved or {}
+    local list = {}
+    if ns:Get("mapDrawKeep") then
+        for _, s in ipairs(Mine()) do
+            if s ~= current and #s.pts >= 2 then   -- (a line still being drawn is not finished)
+                local parts = {}
+                for i, p in ipairs(s.pts) do parts[i] = ("%.5f,%.5f"):format(p[1], p[2]) end
+                list[#list + 1] = { map = s.map, id = s.id, hex = HexColor(s.color), th = s.th,
+                    pts = table.concat(parts, ";"), age = GetTime() - s.t, ts = time() }
+            end
+        end
+    end
+    P13TweaksDB.mapDrawSaved[CharKey()] = (#list > 0) and list or nil
+end
+
+local function RestoreStrokes()
+    if not ns:Get("mapDrawKeep") then return end
+    local saved = P13TweaksDB.mapDrawSaved and P13TweaksDB.mapDrawSaved[CharKey()]
+    if not saved then return end
+    for _, sv in ipairs(saved) do
+        local pts = {}
+        for u, v in tostring(sv.pts):gmatch("([%d%.%-]+),([%d%.%-]+)") do pts[#pts + 1] = { tonumber(u), tonumber(v) } end
+        if #pts >= 2 and sv.map and type(sv.hex) == "string" and #sv.hex == 6 then
+            -- how old the line is now: its age when saved plus the real time since (for the fade option)
+            local elapsed = (sv.age or 0) + math.max(0, time() - (sv.ts or time()))
+            table.insert(strokes, { owner = Me(), id = sv.id or 0, map = sv.map, color = ColorFromHex(sv.hex), pts = pts,
+                t = GetTime() - elapsed, th = sv.th })
+            nextId = math.max(nextId, sv.id or 0)   -- new lines carry on from the highest number (teammates match lines by it)
+        end
+    end
+    Changed()
+end
+
+ns:RegisterOption({
+    key = "mapDrawKeep",
+    type = "toggle",
+    label = "Keep my map drawings through /reload and logout",
+    tooltip = "Your lines on the map are saved when you reload or log out and come back when you log in again (per character). Your group's lines come back when their addons send them again. Clear mine removes them for good.",
+    default = true,
+    onChange = function(on)
+        if not on and P13TweaksDB.mapDrawSaved then P13TweaksDB.mapDrawSaved[CharKey()] = nil end
+    end,
+})
+
 if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
     C_ChatInfo.RegisterAddonMessagePrefix(PREFIX)
 elseif RegisterAddonMessagePrefix then
@@ -964,15 +1199,20 @@ events:RegisterEvent("PLAYER_LOGIN")
 events:RegisterEvent("GROUP_ROSTER_UPDATE")
 events:RegisterEvent("CHAT_MSG_ADDON")
 events:RegisterEvent("MODIFIER_STATE_CHANGED")
+events:RegisterEvent("PLAYER_LOGOUT")   -- (also fires on /reload)
 events:SetScript("OnEvent", function(_, event, a1, a2, a3, a4)
-    if event == "CHAT_MSG_ADDON" then
+    if event == "PLAYER_LOGOUT" then
+        SaveStrokes()
+    elseif event == "CHAT_MSG_ADDON" then
         if a1 == PREFIX and a2 and a4 then OnMessage(a2, a4) end
     elseif event == "MODIFIER_STATE_CHANGED" then
         shiftHeld = IsShiftKeyDown() and WorldMapFrame and WorldMapFrame:IsShown() and true or false
+        altHeld = ns:Get("mapDrawErase") and IsAltKeyDown() and WorldMapFrame and WorldMapFrame:IsShown() and true or false
         RefreshCatcher()
     elseif event == "GROUP_ROSTER_UPDATE" then
         Later("roster", 1, OnRoster)
     else   -- PLAYER_LOGIN
+        RestoreStrokes()
         local sc = WorldMapFrame and WorldMapFrame.ScrollContainer
         if not (sc and sc.Child and sc.GetCanvasScale) then return end
 
@@ -988,10 +1228,17 @@ events:SetScript("OnEvent", function(_, event, a1, a2, a3, a4)
         catcher:SetFrameLevel(sc:GetFrameLevel() + 90)   -- under the button row (+100)
         -- while Shift is held the catcher is up: Shift + wheel sets the line thickness instead of zooming
         catcher:EnableMouseWheel(true)
-        catcher:SetScript("OnMouseWheel", function(_, delta) ns.DrawBrushWheel(delta) end)
+        -- Shift + wheel: line thickness. Alt (alone) + wheel: eraser size.
+        catcher:SetScript("OnMouseWheel", function(_, delta)
+            if altHeld and not shiftHeld then ns.EraserWheel(delta) else ns.DrawBrushWheel(delta) end
+        end)
         catcher:Hide()
         RefreshCatcher()   -- sets what right-click does while the catcher is on
-        catcher:SetScript("OnMouseDown", function(_, button) if button == "LeftButton" then StartStroke() end end)
+        -- (Alt alone is the eraser: it works from the eraser's own update, so a click must not start a line)
+        catcher:SetScript("OnMouseDown", function(_, button)
+            if button == "LeftButton" and not (altHeld and not shiftHeld) then StartStroke() end
+        end)
+        SetupEraser(sc)
         catcher:SetScript("OnMouseUp", function(_, button) if button == "LeftButton" then EndStroke() end end)
         catcher:SetScript("OnHide", EndStroke)
 
@@ -1039,7 +1286,7 @@ events:SetScript("OnEvent", function(_, event, a1, a2, a3, a4)
             if t ~= dbgShown then dbgShown = t; dbg:SetText(t) end
         end)
         poll:SetScript("OnShow", function() Redraw(true) end)
-        WorldMapFrame:HookScript("OnHide", function() shiftHeld = false; SetDrawing(false) end)
+        WorldMapFrame:HookScript("OnHide", function() shiftHeld = false; altHeld = false; FinishErase(); SetDrawing(false) end)
 
         C_Timer.NewTicker(15, Prune)
     end

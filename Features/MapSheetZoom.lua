@@ -24,7 +24,8 @@ local anchored, anchorU, anchorV, anchorSx, anchorSy   -- wheel zoom: keep this 
 local lastMapID
 local downOnMap, dragOn, dragPx, dragPy, dragX, dragY   -- left button: went down on the map; cursor and view at that moment
 local lastTrace = 0
-local fly                  -- a "fly to" in progress: { phase, tu, tv, midS, finalS } (map coordinates)
+local switchedAt = 0           -- when MapSeamless last switched the map level (the game's targets are stale just after)
+local fly                 -- a "fly to" in progress: { phase, tu, tv, midS, finalS } (map coordinates)
 
 local function Enabled() return ns:Get("mapSheetZoom") end
 ns.sheetZoomActive = Enabled   -- MapSeamless steps aside while this is on
@@ -130,9 +131,10 @@ local function Frame(dt)
             if released then
                 -- the button just came up: whatever targets the game's drag left behind are not a request
                 if sc.SetPanTarget then sc:SetPanTarget(ownX, ownY) end
-            else
+            elseif GetTime() - switchedAt > 0.5 then
                 -- 2. somebody else asked the map to go somewhere (we leave its targets equal to our own
-                --    state, so a target that differs from ours is a request): glide there ourselves
+                --    state, so a target that differs from ours is a request): glide there ourselves.
+                --    (Not just after a level switch: SetMapID resets the game's targets, which is not a request.)
                 local tx, ty, ts = sc.targetScrollX, sc.targetScrollY, sc.targetScale
                 if tx and ty and (math.abs(tx - ownX) > EPS or math.abs(ty - ownY) > EPS) and not anchored then
                     goalX, goalY = tx, ty
@@ -194,6 +196,7 @@ local function Frame(dt)
     -- at the old zoom (a flicker). Both skip the work when nothing has changed.
     if ns.RedrawMapDrawings then ns.RedrawMapDrawings() end
     if ns.RefreshMapTerrain then ns.RefreshMapTerrain(false) end
+    ns.RefreshMapLayers()   -- icon layers (flight points...) at the scale we just wrote, not one frame late
 
     -- leave the game's own targets equal to our state, so a request from someone else stands out
     -- (not while we're gliding to one, and never while the button is held)
@@ -237,6 +240,24 @@ ns.OnMapSwitch = function(oldMap, newMap, oldScale, newScale)
         goalX, goalY, goalS = ownX, ownY, ownS
     end
     lastMapID = newMap
+    -- SetMapID reset the game's own zoom/pan targets (to the new map's minimum / centre). Put them back
+    -- equal to our state so the next frame doesn't take them for a request and glide to them.
+    switchedAt = GetTime()
+    sc.targetScale = ownS
+    sc.targetScrollX, sc.targetScrollY = ownX, ownY
+    if sc.SetZoomTarget then pcall(sc.SetZoomTarget, sc, ownS) end
+    if sc.SetPanTarget then sc:SetPanTarget(ownX, ownY) end
+end
+
+-- Somebody just PLACED the view (e.g. MapMemory putting the map back where you left it when it opens): take
+-- what the map shows now as our state, at once. Without this the new targets look like a request to go
+-- there, and the view glides from where the map opened to the restored spot (a visible pan).
+ns.AdoptMapView = function()
+    if not (sc and Enabled() and WorldMapFrame:IsShown()) then return end
+    fly = nil
+    Adopt()
+    if sc.SetPanTarget then sc:SetPanTarget(ownX, ownY) end
+    sc.targetScale = ownS
 end
 
 -- Fly the view to a spot (u, v) on the map being shown, ending at zoom finalS (nil = keep the zoom).

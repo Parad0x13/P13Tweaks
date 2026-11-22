@@ -441,6 +441,7 @@ events:SetScript("OnEvent", function(_, event)
 
         local poll = CreateFrame("Frame", nil, WorldMapFrame)
         poll:SetScript("OnUpdate", function() HideGamePin(); Draw(false) end)
+        ns.AddMapLayerRefresh(function() Draw(false) end)
         poll:SetScript("OnShow", function() Draw(true) end)
     elseif route then
         -- landed, or a new zone: plan again from here (quietly)

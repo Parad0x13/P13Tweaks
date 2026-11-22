@@ -2,7 +2,7 @@
 ## Title: P13Tweaks
 ## Notes: Personal quality-of-life tweaks. Type /p13 to open options.
 ## Author: bryan
-## Version: 0.27.49
+## Version: 0.30.7
 ## SavedVariables: P13TweaksDB
 ## OptionalDeps: QuestieDB, TradeSkillMaster
 
@@ -27,6 +27,8 @@ Features\MinimapTownsfolk.lua
 Features\FlightPoints.lua
 Features\MapRoute.lua
 Features\MapDraw.lua
+Features\MapDrawMinimap.lua
+Features\MapFrameDrag.lua
 Features\MapQuestHints.lua
 Features\FishKey.lua
 Features\FishSession.lua

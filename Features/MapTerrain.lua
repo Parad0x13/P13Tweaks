@@ -17,6 +17,7 @@ local MAP_TYPE_ZONE      = Enum and Enum.UIMapType and Enum.UIMapType.Zone or 3
 
 local SEA_R, SEA_G, SEA_B = 0.04, 0.16, 0.25   -- the flat sea colour (deep blue)
 local blackFill      -- the flat sea colour behind the terrain tiles, over the whole scroll area
+local seaTop         -- the same colour INSIDE the tile layer, just under the tiles: covers whatever the game draws under them
 local layer          -- holds our textures, inside the map's scroll child
 local labelLayer     -- zone names on continent maps
 local tilesInUse = {} -- key (continent * 4096 + col * 64 + row) -> texture
@@ -26,6 +27,15 @@ local boundsCache = {} -- mapID -> { continent, top, left, bottom, right } or fa
 local lastSig
 
 local function Enabled() return ns:Get("mapTerrain") end
+
+-- Black ocean (option mapTerrainBlackSea, default on) or the deep blue.
+function ns.ApplySeaColour()
+    if not blackFill then return end
+    local r, g, b = SEA_R, SEA_G, SEA_B
+    if ns:Get("mapTerrainBlackSea") then r, g, b = 0, 0, 0 end
+    blackFill:SetColorTexture(r, g, b, 1)
+    if seaTop then seaTop:SetColorTexture(r, g, b, 1) end
+end
 
 local function Alpha()
     local pct = tonumber(ns:Get("mapTerrainAlpha")) or 100
@@ -56,6 +66,70 @@ local function Bounds(mapID)
     end
     boundsCache[mapID] = result
     return result
+end
+
+-- What to draw on a map, as segments. Each segment is one continent's tile grid plus the straight-line
+-- change that turns "fraction of that continent's map" into "fraction of the map being viewed":
+-- u = ox + (worldY - ...) * kx  (see DrawSegment).
+--  * a continent or zone map: one segment, the identity change;
+--  * the WORLD map (all of Azeroth): one segment per continent, placed where the game puts that
+--    continent's map on the world map (C_Map.GetMapRectOnMap), so zooming out far enough keeps the terrain.
+local MAP_TYPE_WORLD = Enum and Enum.UIMapType and Enum.UIMapType.World or 1
+local segCache = {}
+
+-- The continents of a world map: { { id = continent map, seg = segment in the world map's fractions } ... }
+local function WorldContinents(worldID)
+    local list = {}
+    if not (C_Map.GetMapChildrenInfo and C_Map.GetMapRectOnMap) then return list end
+    for _, kid in ipairs(C_Map.GetMapChildrenInfo(worldID) or {}) do
+        if kid.mapType == MAP_TYPE_CONTINENT then
+            local cb = Bounds(kid.mapID)
+            local minX, maxX, minY, maxY = C_Map.GetMapRectOnMap(kid.mapID, worldID)
+            if cb and minX and maxX and maxX > minX and maxY > minY then
+                list[#list + 1] = { id = kid.mapID, minX = minX, maxX = maxX, minY = minY, maxY = maxY,
+                    seg = { b = cb, ox = minX, oy = minY,
+                        kx = (maxX - minX) / (cb.left - cb.right), ky = (maxY - minY) / (cb.top - cb.bottom) } }
+            end
+        end
+    end
+    return list
+end
+
+local function Segments(mapID)
+    if segCache[mapID] ~= nil then return segCache[mapID] end
+    local info = C_Map.GetMapInfo and C_Map.GetMapInfo(mapID)
+    local b = Bounds(mapID)
+    if b then
+        local result = { { b = b, ox = 0, oy = 0, kx = 1 / (b.left - b.right), ky = 1 / (b.top - b.bottom) } }
+        -- A continent map also draws the OTHER continents next to it (the view can be panned past the map's
+        -- edge, and they were visible a moment ago on the world map): each placed through the world map.
+        local parentID = info and info.mapType == MAP_TYPE_CONTINENT and info.parentMapID
+        local pinfo = parentID and parentID ~= 0 and C_Map.GetMapInfo(parentID)
+        if pinfo and pinfo.mapType == MAP_TYPE_WORLD and C_Map.GetMapRectOnMap then
+            local mx, xx, my, xy = C_Map.GetMapRectOnMap(mapID, parentID)   -- this continent on the world map
+            if mx and xx and xx > mx and xy > my then
+                local cw, ch = xx - mx, xy - my
+                for _, other in ipairs(WorldContinents(parentID)) do
+                    if other.id ~= mapID then
+                        local s = other.seg   -- (world fractions) -> (this continent's fractions)
+                        result[#result + 1] = { b = s.b, ox = (s.ox - mx) / cw, oy = (s.oy - my) / ch,
+                            kx = s.kx / cw, ky = s.ky / ch }
+                    end
+                end
+            end
+        end
+        segCache[mapID] = result
+        return result
+    end
+    if info and info.mapType == MAP_TYPE_WORLD then
+        local list = {}
+        for _, c in ipairs(WorldContinents(mapID)) do list[#list + 1] = c.seg end
+        if #list > 0 then   -- (an empty answer may just be "not loaded yet": not cached)
+            segCache[mapID] = list
+            return list
+        end
+    end
+    return false
 end
 
 ---------------------------------------------------------------------------
@@ -102,6 +176,7 @@ end
 local function SetPaintedShown(shown)
     paintedHidden = not shown
     if blackFill then blackFill:SetShown(not shown) end
+    if seaTop then seaTop:SetShown(not shown) end
     local pool = WorldMapFrame.detailLayerPool
     if pool and pool.EnumerateActive then
         for layerFrame in pool:EnumerateActive() do Hide(layerFrame, not shown) end
@@ -112,16 +187,14 @@ local function SetPaintedShown(shown)
         for pin in WorldMapFrame:EnumeratePinsByTemplate("MapExplorationPinTemplate") do Hide(pin, not shown) end
     end
 end
-local function DrawTiles(b, sc, child)
-    local W, H = child:GetWidth(), child:GetHeight()
-    local scale = sc:GetCanvasScale()
-    if not (W and W > 0 and H and H > 0 and scale and scale > 0) then return end
-
+-- Draw one continent's tiles (seg, see Segments) that are in view; marks what it uses in `wanted`.
+local function DrawSegment(seg, wanted, sc, child, W, H, scale)
+    local b = seg.b
     -- Map fraction (0-1) covered by one tile, and where tile column/row 0 would start.
-    local du = TILE_YARDS / (b.left - b.right)
-    local dv = TILE_YARDS / (b.top - b.bottom)
-    local function U(col) return (b.left - (32 - col) * TILE_YARDS) / (b.left - b.right) end
-    local function V(row) return (b.top - (32 - row) * TILE_YARDS) / (b.top - b.bottom) end
+    local du = TILE_YARDS * seg.kx
+    local dv = TILE_YARDS * seg.ky
+    local function U(col) return seg.ox + (b.left - (32 - col) * TILE_YARDS) * seg.kx end
+    local function V(row) return seg.oy + (b.top - (32 - row) * TILE_YARDS) * seg.ky end
 
     -- Visible part of the map (map fractions), one tile of margin each side, kept on the map.
     -- Covers where the view is AND where its zoom/pan animation is heading (the zoomed-out
@@ -148,7 +221,6 @@ local function DrawTiles(b, sc, child)
     local ids = ns.TerrainTiles[b.continent]
     local alpha = Alpha()
     local pad = 1 / scale   -- one screen pixel of overlap hides hairline seams
-    local wanted = {}
     for col = cMin, cMax do
         for row = rMin, rMax do
             local id = ids[col * 64 + row]
@@ -170,13 +242,22 @@ local function DrawTiles(b, sc, child)
                     t:ClearAllPoints()
                     t:SetPoint("TOPLEFT", child, "TOPLEFT", x0 * W, -y0 * H)
                     t:SetSize((x1 - x0) * W + pad, (y1 - y0) * H + pad)
+                    t:SetBlendMode("BLEND")   -- (a pooled tile may have been drawn differently before)
                     t:SetTexCoord((x0 - u0) / du, (x1 - u0) / du, (y0 - v0) / dv, (y1 - v0) / dv)
                     t:SetAlpha(alpha)
                 end
             end
         end
     end
-    for key, t in pairs(tilesInUse) do
+end
+
+local function DrawTiles(segs, sc, child)
+    local W, H = child:GetWidth(), child:GetHeight()
+    local scale = sc:GetCanvasScale()
+    if not (W and W > 0 and H and H > 0 and scale and scale > 0) then return end
+    local wanted = {}
+    for _, seg in ipairs(segs) do DrawSegment(seg, wanted, sc, child, W, H, scale) end
+    for key, t in pairs(tilesInUse) do   -- drop what is out of view
         if not wanted[key] then
             t:Hide()
             t:SetTexture(nil)
@@ -197,7 +278,8 @@ end
 local function DrawLabels(mapID, sc, child)
     HideLabels()
     local info = C_Map.GetMapInfo(mapID)
-    if not (ns:Get("mapTerrainLabels") and info and info.mapType == MAP_TYPE_CONTINENT) then return end
+    local onWorld = info and info.mapType == MAP_TYPE_WORLD   -- the whole-Azeroth map: name the continents
+    if not (ns:Get("mapTerrainLabels") and info and (info.mapType == MAP_TYPE_CONTINENT or onWorld)) then return end
     local scale = sc:GetCanvasScale()
     local W, H = child:GetWidth(), child:GetHeight()
     -- the label layer undoes the map's zoom, so names stay the same size on screen
@@ -205,7 +287,8 @@ local function DrawLabels(mapID, sc, child)
     labelLayer:SetSize(W * scale, H * scale)
     local n = 0
     for _, zone in ipairs(C_Map.GetMapChildrenInfo(mapID) or {}) do
-        if zone.mapType == MAP_TYPE_ZONE and C_Map.GetMapRectOnMap then
+        if zone.mapType == (onWorld and MAP_TYPE_CONTINENT or MAP_TYPE_ZONE) and C_Map.GetMapRectOnMap
+            and (not onWorld or Bounds(zone.mapID)) then   -- (on the world map only continents we draw)
             local minX, maxX, minY, maxY = C_Map.GetMapRectOnMap(zone.mapID, mapID)
             if minX and maxX > minX then
                 n = n + 1
@@ -235,8 +318,8 @@ local function Refresh(force)
     local child = sc and sc.Child
     if not (child and layer) then return end
     local mapID = WorldMapFrame:GetMapID()
-    local hasTerrain = mapID and Bounds(mapID)
-    local b = Enabled() and hasTerrain
+    local hasTerrain = mapID and Segments(mapID)
+    local b = Enabled() and hasTerrain   -- (the segments to draw)
 
     local button = layer.toggleButton
     if button then
@@ -286,7 +369,7 @@ ns:RegisterOption({
     numberKey = "mapTerrainAlpha",
     numberDefault = 100,
     min = 10, max = 100, step = 5,
-    tooltip = "Kalimdor and Eastern Kingdoms continent and zone maps show the real terrain (the same pictures the minimap uses) instead of the painted map, so zooming in and out looks like one detailed map. Lower the opacity to let the painted map show through. Open sea, dungeons and other continents keep the normal map.",
+    tooltip = "Kalimdor and Eastern Kingdoms continent and zone maps, and the map of the whole world, show the real terrain (the same pictures the minimap uses) instead of the painted map, so zooming in and out looks like one detailed map. Lower the opacity to let the painted map show through. Dungeons and other worlds keep the normal map.",
     default = true,
     onChange = function() Refresh(true) end,
 })
@@ -299,6 +382,16 @@ ns:RegisterOption({
     default = true,
     onChange = function() Refresh(true) end,
 })
+
+ns:RegisterOption({
+    key = "mapTerrainBlackSea",
+    type = "toggle",
+    label = "Black ocean behind the terrain map",
+    tooltip = "Where the real-terrain map has no tiles (open sea, past the edge of the world) the background is black. Untick for the deep blue sea colour.",
+    default = true,
+    onChange = function() ns.ApplySeaColour() end,
+})
+
 
 ns:RegisterOption({
     key = "mapTerrainButton",
@@ -491,12 +584,20 @@ loader:SetScript("OnEvent", function()
     -- ocean. A texture of the scroll area itself, so it always draws beneath the map's contents.
     blackFill = sc:CreateTexture(nil, "BACKGROUND")
     blackFill:SetAllPoints(sc)
-    blackFill:SetColorTexture(SEA_R, SEA_G, SEA_B, 1)
+    ns.ApplySeaColour()
     blackFill:Hide()
 
     layer = CreateFrame("Frame", nil, sc.Child)
     layer:SetAllPoints(sc.Child)
     layer:SetFrameLevel(sc.Child:GetFrameLevel())  -- under the pins
+
+    -- Opaque sea inside the tile layer, beneath the tiles: far larger than the map so it fills the whole
+    -- pane at any zoom or pan (a texture isn't clipped by its frame; the scroll area clips it to the pane).
+    seaTop = layer:CreateTexture(nil, "BACKGROUND", nil, -8)
+    seaTop:SetPoint("TOPLEFT", sc.Child, "TOPLEFT", -6000, 6000)
+    seaTop:SetPoint("BOTTOMRIGHT", sc.Child, "BOTTOMRIGHT", 6000, -6000)
+    seaTop:Hide()
+    ns.ApplySeaColour()
 
     labelLayer = CreateFrame("Frame", nil, sc.Child)
     labelLayer:SetPoint("TOPLEFT", sc.Child, "TOPLEFT")

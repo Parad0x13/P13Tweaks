@@ -287,6 +287,7 @@ events:SetScript("OnEvent", function()
         worldLayer:SetFrameLevel(sc.Child:GetFrameLevel() + 16)
         local poll = CreateFrame("Frame", nil, WorldMapFrame)
         poll:SetScript("OnUpdate", function() PlaceWorldIcons(false) end)
+        ns.AddMapLayerRefresh(function() PlaceWorldIcons(false) end)
         poll:SetScript("OnShow", function() PlaceWorldIcons(true) end)
     end
     -- A moment after login: the first NPC scan of QuestieDB takes a beat.

@@ -618,7 +618,7 @@ ns:RegisterOption({
     type = "toggle",
     label = "Show my tracked quests' areas on the tile map",
     tooltip = "Shades the places where the quests you are tracking need you (where to kill, collect or use things) on the tile map, and puts a gold ? where a finished quest is handed in. Needs QuestieDB.",
-    default = true,
+    default = false,
     onChange = function() lastSig = nil end,
 })
 
@@ -886,6 +886,14 @@ migrate:SetScript("OnEvent", function()
     if not P13TweaksDB.nativeQuestAreasV3 then   -- (back on: being reworked, see PlaceBlob)
         P13TweaksDB.nativeQuestAreasV3 = true
         P13TweaksDB.mapSheetQuestsNative = true
+    end
+    -- the separate tile-map window is parked while the real world map is worked on: off by default
+    if not P13TweaksDB.sheetParkedV1 then
+        P13TweaksDB.sheetParkedV1 = true
+        P13TweaksDB.mapSheet = false
+        P13TweaksDB.mapSheetQuests = false
+        if ns.sheetButton then ns.sheetButton:Hide() end
+        if ns.sheetFrame then ns.sheetFrame:Hide() end
     end
 end)
 

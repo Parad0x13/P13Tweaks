@@ -134,7 +134,6 @@ ns.MapPoint = MapPoint
 -- so make the arrow re-measure against the final scale right away, or it can show for a frame at a
 -- size worked out for the old scale (a giant arrow).
 local playerPin
-local pinLogLine   -- set below by the pindebug diagnostic
 function ns.SyncPlayerPin()
     if not playerPin and WorldMapFrame.EnumeratePinsByTemplate then
         for pin in WorldMapFrame:EnumeratePinsByTemplate("GroupMembersPinTemplate") do playerPin = pin break end
@@ -142,25 +141,23 @@ function ns.SyncPlayerPin()
     if not playerPin then return end
     -- The game also "pings" the arrow (a huge copy shrinking onto you) when the map changes. Those
     -- methods live on the widget, not the pin table, so they were never wrapped before. Skip a ping that
-    -- our own level switches cause; log every ping call for /p13 pindebug.
+    -- our own level switches cause.
     if not playerPin.p13PingHooked then
         playerPin.p13PingHooked = true
-        for _, name in ipairs({ "StartPlayerPing", "StopPlayerPing", "SetPlayerPingScale", "SetPlayerPingTexture" }) do
-            local orig = playerPin[name]
-            if orig then
-                playerPin[name] = function(self, ...)
-                    local ours = ns.suppressMapRing or GetTime() - lastSwitch < 0.6
-                    -- (routine scale updates are only logged around a level switch, or the log fills up)
-                    if pinLogLine and (ours or name ~= "SetPlayerPingScale") then
-                        pinLogLine(("%s(%s) %s"):format(name, tostring((...)), ours and "SUPPRESSED" or "allowed"))
-                    end
-                    if ours and name == "StartPlayerPing" then return end
-                    return orig(self, ...)
-                end
+        local orig = playerPin.StartPlayerPing
+        if orig then
+            playerPin.StartPlayerPing = function(self, ...)
+                if ns.suppressMapRing or GetTime() - lastSwitch < 0.6 then return end
+                return orig(self, ...)
             end
         end
     end
     if playerPin.OnCanvasScaleChanged then pcall(playerPin.OnCanvasScaleChanged, playerPin) end
+    -- ROOT CAUSE of the arrow flicker at level switches (found with the pindebug trace): SetPinSize only
+    -- STORES the new size and flags "needs full update"; the arrow is rebuilt in Refresh(). SetMapID runs a
+    -- Refresh with the OLD size, our new size only takes effect at the NEXT Refresh = the next frame, so
+    -- one frame is drawn with the old size at the new zoom (a giant arrow). Refresh now, after the size.
+    if playerPin.Refresh then pcall(playerPin.Refresh, playerPin) end
 end
 
 -- Every pin on the map (not just the arrow: anvils, quest icons...) works its on-screen size out from the
@@ -176,71 +173,6 @@ function ns.SyncAllPins()
     end
 end
 
--- Diagnostic for the player-arrow flicker: /p13 pindebug lists the player pin's ping/size/scale methods
--- and prints each call (at most one line per method per 0.1 s) with the canvas scale and map.
-local pinLog, pinLast, pinPlayerSize = false, {}, nil
-pinLogLine = function(text)
-    if not pinLog then return end
-    P13TweaksDB.pinLog = P13TweaksDB.pinLog or {}
-    if #P13TweaksDB.pinLog < 800 then
-        table.insert(P13TweaksDB.pinLog, ("%.2f %s  canvasScale %.4f  map %s"):format(
-            GetTime(), text, WorldMapFrame:GetCanvasScale(), tostring(WorldMapFrame:GetMapID())))
-    end
-end
--- every rendered frame while logging: is the arrow's last size still right for the current scale?
--- (size x scale should stay about 27; anything else means a frame of wrong-sized arrow)
-local pinCheck = CreateFrame("Frame")
-pinCheck:SetScript("OnUpdate", function()
-    if not (pinLog and pinPlayerSize and WorldMapFrame:IsShown()) then return end
-    local px = pinPlayerSize * WorldMapFrame:GetCanvasScale()
-    if px < 20 or px > 35 then
-        P13TweaksDB.pinLog = P13TweaksDB.pinLog or {}
-        if #P13TweaksDB.pinLog < 800 then
-            table.insert(P13TweaksDB.pinLog, ("%.2f MISMATCH arrow shows %.0f px (size %.3f x canvasScale %.4f)  map %s"):format(
-                GetTime(), px, pinPlayerSize, WorldMapFrame:GetCanvasScale(), tostring(WorldMapFrame:GetMapID())))
-        end
-    end
-end)
-ns:RegisterCommand("pindebug", "log the player arrow's ping/size/scale calls (flicker hunting)", function()
-    pinLog = not pinLog
-    if not WorldMapFrame.EnumeratePinsByTemplate then ns:Print("no EnumeratePinsByTemplate here") return end
-    for pin in WorldMapFrame:EnumeratePinsByTemplate("GroupMembersPinTemplate") do
-        if not pin.p13Spy then
-            pin.p13Spy = true
-            local names = {}
-            for k, v in pairs(pin) do
-                if type(v) == "function" and type(k) == "string" and (k:find("Ping") or k:find("Size") or k:find("Scale")) then
-                    names[#names + 1] = k
-                    pin[k] = function(self, ...)
-                        if k == "SetPinSize" and (...) == "player" then pinPlayerSize = (select(2, ...)) end
-                        if pinLog and (k == "SetPinSize" or k == "SetScaleStyle" or k == "ApplyCurrentScale")
-                            and (ns.suppressMapRing or GetTime() - lastSwitch < 0.6) then   -- only around a level switch
-                            -- saved to the SavedVariables file on /reload or logout (chat can't be copied)
-                            P13TweaksDB.pinLog = P13TweaksDB.pinLog or {}
-                            local log = P13TweaksDB.pinLog
-                            if #log < 800 then
-                                local args = {}
-                                for i = 1, select("#", ...) do args[i] = tostring((select(i, ...))) end
-                                local sc2 = WorldMapFrame.ScrollContainer
-                                log[#log + 1] = ("%.2f %s(%s)  canvasScale %.4f (min %.4f max %.4f)  frameScale %.3f  map %s"):format(
-                                    GetTime(), k, table.concat(args, ", "), WorldMapFrame:GetCanvasScale(),
-                                    sc2.GetScaleForMinZoom and sc2:GetScaleForMinZoom() or -1,
-                                    sc2.GetScaleForMaxZoom and sc2:GetScaleForMaxZoom() or -1,
-                                    self:GetScale() or -1, tostring(WorldMapFrame:GetMapID()))
-                            end
-                        end
-                        return v(self, ...)
-                    end
-                end
-            end
-            table.sort(names)
-            P13TweaksDB.pinMethods = table.concat(names, ", ")   -- saved too
-            ns:Print("player pin methods watched: " .. P13TweaksDB.pinMethods)
-        end
-    end
-    if pinLog then P13TweaksDB.pinLog = {} end   -- each run starts a fresh log
-    ns:Print("pin logging " .. (pinLog and "ON (log is saved on /reload)" or ("OFF - " .. #(P13TweaksDB.pinLog or {}) .. " lines logged, /reload to save")))
-end)
 
 -- Switch maps without the "map changed" ring and with our own zoom applied straight away.
 local function SwitchTo(mapID, scale, x, y)
@@ -249,12 +181,10 @@ local function SwitchTo(mapID, scale, x, y)
     -- The game limits how far the view may sit off-centre on the new map (a zoomed-out zone can
     -- only sit centred) and quietly moves it: the visible jump at hand-over. Open the limits up
     -- (see EDGE_ROOM) and place the view exactly where we ask.
-    lastSwitch = GetTime()   -- (early, so the pindebug window covers the whole switch)
+    lastSwitch = GetTime()   -- (early: the ping guard below covers the whole switch)
     ns.suppressMapRing = true
     ns.SyncPlayerPin()   -- (also installs the ping guard before the map changes)
-    if pinLogLine then pinLogLine(("SWITCH %s -> %s  (scale %.4f -> wanted %.4f)"):format(tostring(oldMap), tostring(mapID), oldScale, scale)) end
     WorldMapFrame:SetMapID(mapID)
-    if pinLogLine then pinLogLine("SWITCH done SetMapID") end
     ns.suppressMapRing = false
     sc:InstantPanAndZoom(scale, x, y, true)
     -- The new map's limits were just set by the game; open them up and put the view exactly
@@ -266,13 +196,10 @@ local function SwitchTo(mapID, scale, x, y)
     end
     if sc.SetPanTarget then sc:SetPanTarget(x, y) end
     ns.SyncAllPins()
-    if pinLogLine then
-        pinLogLine(("SWITCH end: canvas %.4f childScale %.4f  arrow size %s -> %.1f px on screen"):format(
-            sc:GetCanvasScale(), sc.Child and sc.Child:GetScale() or -1, tostring(pinPlayerSize), (pinPlayerSize or 0) * sc:GetCanvasScale()))
-    end
     lastSwitch = GetTime()
     if ns.RefreshMapTerrain then ns.RefreshMapTerrain(true) end
     if ns.RedrawMapDrawings then ns.RedrawMapDrawings() end   -- the lines for the new map, this same frame
+    ns.RefreshMapLayers()   -- flight points, town icons, hints, route: for the new map and scale, this same frame
     -- let the tile-map zoom carry its state (target zoom, the spot under the cursor) to the new map
     if ns.OnMapSwitch then ns.OnMapSwitch(oldMap, mapID, oldScale, sc:GetCanvasScale()) end
     if P13TweaksDB and P13TweaksDB.mapDebug then

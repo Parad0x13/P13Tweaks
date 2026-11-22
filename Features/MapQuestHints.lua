@@ -282,5 +282,6 @@ events:SetScript("OnEvent", function()
 
     local poll = CreateFrame("Frame", nil, WorldMapFrame)
     poll:SetScript("OnUpdate", function() Redraw(false) end)
+    ns.AddMapLayerRefresh(function() Redraw(false) end)
     poll:SetScript("OnShow", function() hintsAt = 0; Redraw(true) end)
 end)

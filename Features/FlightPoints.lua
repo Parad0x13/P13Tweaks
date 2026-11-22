@@ -241,6 +241,7 @@ local function EnsureLayer()
     pinLayer:SetFrameLevel(sc.Child:GetFrameLevel() + 20)   -- above the terrain
     local poll = CreateFrame("Frame", nil, WorldMapFrame)
     poll:SetScript("OnUpdate", function() Place(false) end)
+    ns.AddMapLayerRefresh(function() Place(false) end)   -- also re-placed in the same frame as a zoom / level switch
     return pinLayer
 end
 

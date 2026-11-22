@@ -61,6 +61,20 @@ events:SetScript("OnEvent", function(self, event, arg1)
         P13TweaksDB.mapOverlaySavedFade = nil
         P13TweaksDB.fishMap, P13TweaksDB.fishMapView, P13TweaksDB.fishLog = nil, nil, nil  -- removed fishing map
         P13TweaksDB.cookingProfit, P13TweaksDB.cookRecipes, P13TweaksDB.cookDebug = nil, nil, nil  -- removed cooking profit (moved to TSM)
+        P13TweaksDB.pinLog, P13TweaksDB.pinMethods = nil, nil  -- removed arrow-flicker diagnostics (bug solved)
+        P13TweaksDB.mapTerrainTrim, P13TweaksDB.hiddenTiles, P13TweaksDB.mapDebugTiles = nil, nil, nil  -- removed tile heuristics (data now comes from the client)
+        P13TweaksDB.mapRegions = nil
+        P13TweaksDB.mapQuestMax = nil  -- removed: quest log on the maximized map
+        P13TweaksDB.mapTerrainSeeThrough = nil  -- removed see-through tiles (the tile pictures have no transparency)
+        -- One-time: show EVERY terrain tile exactly as the client draws it, so the new tile data can be checked
+        -- (nothing see-through, blue sea behind so tile edges show, full opacity). Each can be switched back in
+        -- /p13 > Map > Look afterwards.
+        if not P13TweaksDB.terrainReviewV1 then
+            P13TweaksDB.terrainReviewV1 = true
+            P13TweaksDB.mapTerrain = true
+            P13TweaksDB.mapTerrainBlackSea = false
+            P13TweaksDB.mapTerrainAlpha = 100
+        end
         for _, def in ipairs(ns.options) do
             if P13TweaksDB[def.key] == nil then
                 P13TweaksDB[def.key] = def.default
@@ -92,6 +106,16 @@ function ns.LayoutMapButtons()
             x = x + b:GetWidth() + 4
         end
     end
+end
+
+-- Icon layers on the world map (flight points, town icons, quest hints, route) place themselves from their
+-- own OnUpdate, whose order against the map's is not fixed: right after we change the zoom or the map level
+-- they would be drawn for one frame at the OLD scale (one giant icon = a flicker). Each layer registers its
+-- placement function here; the map code calls ns.RefreshMapLayers() in the same frame as the change.
+local layerRefreshers = {}
+function ns.AddMapLayerRefresh(fn) layerRefreshers[#layerRefreshers + 1] = fn end
+function ns.RefreshMapLayers()
+    for i = 1, #layerRefreshers do pcall(layerRefreshers[i]) end
 end
 
 function ns:AddMapButton(button, order)
