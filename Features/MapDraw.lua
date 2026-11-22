@@ -18,11 +18,28 @@ local PREFIX = "P13M"
 local MAX_MSG = 250
 local PTS_PER_MSG = 50          -- 50 points * 4 characters + the header stays under 255 bytes
 local BURST, REFILL = 4, 1.5    -- gentle: the quest sharing uses the same game limit
-local MIN_STEP = 0.005          -- drawing: ignore points closer than this (fraction of the map)
+local MIN_STEP_PX = 3           -- drawing: a new point once the cursor has moved this many screen pixels
+local SIMPLIFY_PX = 1.5         -- when a line is finished, points closer than this to the line through their neighbours are dropped
+local lastSimplified           -- debug text about the last finished line
+local MIN_STEP_FRAC = 0.00025     -- ...but never closer than this (fraction of the map: about one step of the 12-bit encoding)
 local MAX_POINTS = 300          -- per stroke
 local MAX_STROKES = 80          -- kept per player
 local FADE_SECONDS = 30         -- last seconds of a line's life are a fade-out
-local THICKNESS = 3
+local THICKNESS = 3            -- default line thickness (screen pixels)
+local THICK_MIN, THICK_MAX = 1, 12
+local pendingTh = {}           -- "owner:id" -> thickness that arrived before its line did
+
+-- The brush: how thick new lines are (Shift + mouse wheel on the map changes it). Saved between sessions.
+local BRUSHES = { 2, 4, 8 }   -- thin, medium (default), thick
+local function BrushIndex()
+    local t = tonumber(P13TweaksDB and P13TweaksDB.mapDrawThickness) or BRUSHES[2]
+    local best = 1
+    for i, v in ipairs(BRUSHES) do   -- (a value saved by the earlier 1-12 version snaps to the nearest)
+        if math.abs(v - t) < math.abs(BRUSHES[best] - t) then best = i end
+    end
+    return best
+end
+local function Brush() return BRUSHES[BrushIndex()] end
 
 local strokes = {}     -- { owner, id, map, color = {r,g,b}, pts = { {u,v}... }, t = GetTime(), demo }
 local partial = {}     -- "owner:id" -> pieces of a stroke still arriving
@@ -94,6 +111,8 @@ local function ColorFromHex(h)
 end
 
 local function MyColor()
+    local hex = P13TweaksDB and P13TweaksDB.mapDrawColor   -- picked with the colour ring (Shift + hold right button)
+    if type(hex) == "string" and #hex == 6 and tonumber(hex, 16) then return ColorFromHex(hex) end
     local _, class = UnitClass("player")
     local c = class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
     if c then return { c.r, c.g, c.b } end
@@ -144,6 +163,8 @@ local function SendStroke(s)
         local to = math.min(#s.pts, part * PTS_PER_MSG)
         Send(("S^%d^%d^%d^%d^%s^%s"):format(s.map, s.id, part, parts, HexColor(s.color), EncodePoints(s.pts, from, to)))
     end
+    -- thickness travels in a message of its own after the line (older versions simply ignore it)
+    if s.th and s.th ~= THICKNESS then Send(("T^%d^%d"):format(s.id, s.th)) end
 end
 
 ---------------------------------------------------------------------------
@@ -252,7 +273,20 @@ local function OnMessage(msg, sender)
             for i = 1, parts do for _, pt in ipairs(p.got[i]) do all[#all + 1] = pt end end
             -- a re-sent stroke replaces the old copy
             RemoveWhere(function(s) return s.owner == who and s.id == p.id end)
-            AddStroke({ owner = who, id = p.id, map = p.map, color = ColorFromHex(p.hex), pts = all, t = GetTime() })
+            AddStroke({ owner = who, id = p.id, map = p.map, color = ColorFromHex(p.hex), pts = all, t = GetTime(),
+                th = pendingTh[key] })
+            pendingTh[key] = nil
+        end
+    elseif kind == "T" then
+        local id, th = msg:match("^T%^(%d+)%^(%d+)$")
+        id, th = tonumber(id), tonumber(th)
+        if id and th then
+            th = math.max(THICK_MIN, math.min(THICK_MAX, th))
+            local found = false
+            for _, s in ipairs(strokes) do
+                if s.owner == who and s.id == id then s.th, found = th, true end
+            end
+            if found then Changed() else pendingTh[who .. ":" .. id] = th end   -- the line is still arriving
         end
     elseif kind == "U" then
         local id = tonumber(msg:match("^U%^(%d+)"))
@@ -311,6 +345,30 @@ end
 ---------------------------------------------------------------------------
 -- Drawing the lines on the map
 ---------------------------------------------------------------------------
+
+-- Thick segments have flat ends, which leave gaps at the corners. A round dot as wide as the line at each
+-- point where segments meet fills them in. Only used for lines DOT_FROM px or thicker (thinner gaps don't show).
+local DOT_FROM = 4
+local dotPool, dotsUsed = {}, 0
+
+-- Stacking: lines drawn later sit on top of earlier ones. Each line gets its own slot in the frame's
+-- drawing layers (4 layers x 16 sub-levels = 64 slots), newest on top; lines older than the newest 64
+-- share the bottom slot. `i` is the line's place in the list (oldest first), `n` how many there are.
+local SLOT_LAYERS = { "BACKGROUND", "BORDER", "ARTWORK", "OVERLAY" }
+local function SlotLayer(i, n)
+    local slot = math.max(1, #SLOT_LAYERS * 16 - (n - i))
+    return SLOT_LAYERS[math.floor((slot - 1) / 16) + 1], (slot - 1) % 16 - 8
+end
+local function MakeDot(parent)
+    local t = parent:CreateTexture(nil, "OVERLAY")
+    if parent.CreateMaskTexture and t.AddMaskTexture then
+        local mask = parent:CreateMaskTexture()
+        mask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+        mask:SetAllPoints(t)
+        t:AddMaskTexture(mask)
+    end
+    return t
+end
 
 local function GetLine()
     linesUsed = linesUsed + 1
@@ -386,6 +444,8 @@ local function Redraw(force)
 
     for i = 1, linesUsed do linePool[i]:Hide() end
     linesUsed = 0
+    for i = 1, dotsUsed do dotPool[i]:Hide() end
+    dotsUsed = 0
     if not On() then return end
 
     RaiseLayer(child, force)
@@ -394,22 +454,39 @@ local function Redraw(force)
     local sx, sy = W * scale, H * scale
     local minutes = FadeMinutes()
     local now = GetTime()
-    for _, s in ipairs(strokes) do
+    for si, s in ipairs(strokes) do
         local pts = StrokeOn(s, mapID)
         if pts and #pts >= 2 then
-            local alpha = 0.9
+            local lyr, sub = SlotLayer(si, #strokes)
+            local alpha = 1
             if minutes then
                 local left = minutes * 60 - (now - s.t)
-                if left < FADE_SECONDS then alpha = 0.9 * math.max(0.1, left / FADE_SECONDS) end
+                if left < FADE_SECONDS then alpha = math.max(0.1, left / FADE_SECONDS) end
             end
             for i = 2, #pts do
                 if linesUsed >= 3000 then break end
                 local a, b = pts[i - 1], pts[i]
                 local l = GetLine()
-                l:SetThickness(THICKNESS)
+                l:SetDrawLayer(lyr, sub)
+                l:SetThickness(s.th or THICKNESS)
                 l:SetColorTexture(s.color[1], s.color[2], s.color[3], alpha)
                 l:SetStartPoint("TOPLEFT", layer, a[1] * sx, -a[2] * sy)
                 l:SetEndPoint("TOPLEFT", layer, b[1] * sx, -b[2] * sy)
+            end
+            local th = s.th or THICKNESS
+            if th >= DOT_FROM then
+                for i = 1, #pts do
+                    if dotsUsed >= 3000 then break end
+                    dotsUsed = dotsUsed + 1
+                    local d = dotPool[dotsUsed]
+                    if not d then d = MakeDot(layer); dotPool[dotsUsed] = d end
+                    d:SetDrawLayer(lyr, sub)
+                    d:SetSize(th, th)
+                    d:ClearAllPoints()
+                    d:SetPoint("CENTER", layer, "TOPLEFT", pts[i][1] * sx, -pts[i][2] * sy)
+                    d:SetColorTexture(s.color[1], s.color[2], s.color[3], alpha)
+                    d:Show()
+                end
             end
         end
     end
@@ -432,18 +509,70 @@ end
 -- The mouse catcher over the map is active while Draw is on, while Shift is held (hold Shift and drag
 -- to draw without the button), and while a stroke is still being drawn.
 local shiftHeld = false
+local passRight
 local function RefreshCatcher()
     if not catcher then return end
+    -- Shift + right button is the colour ring, so the catcher swallows right clicks (no "back a level")
+    -- while it is on; with the ring switched off, right-click passes through as before.
+    local wantPass = not ns:Get("mapDrawPicker")
+    if wantPass ~= passRight and catcher.SetPassThroughButtons then
+        passRight = wantPass
+        if wantPass then pcall(catcher.SetPassThroughButtons, catcher, "RightButton") else pcall(catcher.SetPassThroughButtons, catcher) end
+    end
     local active = On() and (drawing or shiftHeld or current ~= nil) and true or false
     if catcher:IsShown() ~= active then catcher:SetShown(active) end
     catcher:EnableMouse(active)
+end
+
+-- Ramer-Douglas-Peucker: keep only the points that matter. A point is dropped when it lies within
+-- SIMPLIFY_PX screen pixels (at the finest zoom the line was drawn at) of the straight line between the
+-- points kept on either side of it. The ends always stay. Distances are measured in screen pixels.
+local function Simplify(pts, pxU, pxV)
+    local n = #pts
+    if n <= 2 then return pts end
+    local eps = math.max(SIMPLIFY_PX, MIN_STEP_FRAC * math.min(pxU, pxV))   -- (never finer than the encoding)
+    local keep = { [1] = true, [n] = true }
+    local stack = { { 1, n } }
+    while #stack > 0 do
+        local a, b = unpack(table.remove(stack))
+        local ax, ay, bx, by = pts[a][1] * pxU, pts[a][2] * pxV, pts[b][1] * pxU, pts[b][2] * pxV
+        local dx, dy = bx - ax, by - ay
+        local len2 = dx * dx + dy * dy
+        local far, farD = nil, eps
+        for i = a + 1, b - 1 do
+            local px, py = pts[i][1] * pxU, pts[i][2] * pxV
+            local d
+            if len2 == 0 then
+                d = math.sqrt((px - ax) ^ 2 + (py - ay) ^ 2)
+            else
+                local t = math.max(0, math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2))
+                d = math.sqrt((px - ax - t * dx) ^ 2 + (py - ay - t * dy) ^ 2)
+            end
+            if d > farD then far, farD = i, d end
+        end
+        if far then
+            keep[far] = true
+            stack[#stack + 1] = { a, far }
+            stack[#stack + 1] = { far, b }
+        end
+    end
+    local out = {}
+    for i = 1, n do if keep[i] then out[#out + 1] = pts[i] end end
+    return out
 end
 
 local function EndStroke()
     if not current then return end
     local s = current
     current = nil
-    catcher:SetScript("OnUpdate", nil)
+    if catcher then catcher:SetScript("OnUpdate", nil) end
+    -- tidy the line before it is sent: same shape, far fewer points
+    if #s.pts > 2 and s.pxU and s.pxV then
+        local before = #s.pts
+        s.pts = Simplify(s.pts, s.pxU, s.pxV)
+        s.conv, s.sheet = nil, nil   -- cached conversions were for the old points
+        lastSimplified = ("last line: %d -> %d pts"):format(before, #s.pts)
+    end
     if #s.pts >= 2 then
         nextId = nextId + 1
         s.id = nextId
@@ -456,24 +585,92 @@ local function EndStroke()
     RefreshCatcher()
 end
 
+local function BeginStroke(mapID, u, v)
+    current = { owner = Me(), id = 0, map = mapID, color = MyColor(), pts = { { u, v } }, t = GetTime(), th = Brush() }
+    table.insert(strokes, current)
+    Changed()
+end
+
+-- pxU, pxV: how many screen pixels the whole map is wide / high right now. A new point is kept once the
+-- cursor has moved MIN_STEP_PX on screen, so a line drawn zoomed in is as smooth as one drawn zoomed out.
+-- At the point limit, every second point of the line so far is dropped (the ends stay) to make room.
+local function AddPoint(cu, cv, pxU, pxV)
+    if not current then return end
+    local pts = current.pts
+    local last = pts[#pts]
+    -- remember the finest zoom the line was drawn at (the tidy-up at the end measures in pixels of that)
+    if not current.pxU or pxU > current.pxU then current.pxU, current.pxV = pxU, pxV end
+    local dx, dy = cu - last[1], cv - last[2]
+    if dx * dx + dy * dy < MIN_STEP_FRAC ^ 2 then return end
+    if (dx * pxU) ^ 2 + (dy * pxV) ^ 2 < MIN_STEP_PX ^ 2 then return end
+    if #pts >= MAX_POINTS then
+        local thin = { pts[1] }
+        for i = 3, #pts - 1, 2 do thin[#thin + 1] = pts[i] end
+        thin[#thin + 1] = pts[#pts]
+        pts = thin
+        current.pts = pts
+        current.thinned = (current.thinned or 0) + 1
+    end
+    pts[#pts + 1] = { cu, cv }
+    Changed()
+end
+
+-- Debug readout (option "mapDrawDebug"): how many points are registered.
+local function DebugText()
+    local total, mine = 0, 0
+    for _, s in ipairs(strokes) do
+        total = total + #s.pts
+        if s.owner == Me() then mine = mine + 1 end
+    end
+    local cur = current and #current.pts or 0
+    return ("draw: current %d pts%s | all %d pts | %d strokes (%d mine) | step %d px%s"):format(
+        cur, current and current.thinned and (" (thinned x" .. current.thinned .. ")") or "", total, #strokes, mine, MIN_STEP_PX,
+        lastSimplified and (" | " .. lastSimplified) or "")
+end
+
 local function StartStroke()
     local mapID = WorldMapFrame:GetMapID()
     local u, v = CursorOnMap()
     if not (mapID and u) then return end
-    current = { owner = Me(), id = 0, map = mapID, color = MyColor(), pts = { { u, v } }, t = GetTime() }
-    table.insert(strokes, current)
-    Changed()
+    BeginStroke(mapID, u, v)
     catcher:SetScript("OnUpdate", function()
         if not current then return end
         local cu, cv = CursorOnMap()
-        if not cu then return end
-        local last = current.pts[#current.pts]
-        if (cu - last[1]) ^ 2 + (cv - last[2]) ^ 2 >= MIN_STEP ^ 2 and #current.pts < MAX_POINTS then
-            current.pts[#current.pts + 1] = { cu, cv }
-            Changed()
+        if cu then
+            local sc = WorldMapFrame.ScrollContainer
+            local scale = sc:GetCanvasScale()
+            AddPoint(cu, cv, sc.Child:GetWidth() * scale, sc.Child:GetHeight() * scale)
         end
     end)
 end
+
+-- For the tile-map window (MapSheet.lua): it draws the same strokes on its own sheet. It converts its
+-- tile positions to a map (u, v) itself and hands them to us, so lines are shared and shown on the normal map too.
+ns.SheetDraw = {
+    enabled = On,
+    version = function() return version end,
+    strokes = function() return strokes end,
+    drawing = function() return current ~= nil end,
+    begin = function(mapID, u, v) if On() then EndStroke(); BeginStroke(mapID, u, v) end end,
+    add = AddPoint,
+    finish = EndStroke,
+    undo = Undo,
+    clearMine = ClearMine,
+    hasMine = function() return #Mine() > 0 end,
+    alpha = function(s)
+        local minutes = FadeMinutes()
+        if not minutes then return 1 end
+        local left = minutes * 60 - (GetTime() - s.t)
+        if left < FADE_SECONDS then return math.max(0.1, left / FADE_SECONDS) end
+        return 1
+    end,
+    thicknessOf = function(s) return s.th or THICKNESS end,
+    dotFrom = DOT_FROM,
+    slotLayer = SlotLayer,
+    makeDot = MakeDot,
+    wheel = function(delta) ns.DrawBrushWheel(delta) end,
+    debugText = function() return ns:Get("mapDrawDebug") and DebugText() or nil end,
+}
 
 local function SetDrawing(on)
     on = on and On() and true or false
@@ -484,6 +681,190 @@ local function SetDrawing(on)
 end
 
 ---------------------------------------------------------------------------
+-- Colour ring: hold Shift, press and HOLD the right mouse button on the map (or the tile map); a ring of
+-- swatches opens around the cursor. Move toward one and let go to pick it (let go in the middle = no change).
+-- The first swatch is your class colour, the default. New lines use the picked colour; lines already
+-- drawn keep theirs. The colour is saved between sessions.
+---------------------------------------------------------------------------
+
+local SWATCHES = {   -- first one = class colour (hex nil)
+    { "Class colour", nil },
+    { "Red", "ff3333" }, { "Orange", "ff8c1a" }, { "Yellow", "ffe619" }, { "Green", "4dff4d" },
+    { "Blue", "4d80ff" }, { "Purple", "bf66ff" }, { "White", "ffffff" },
+}
+local RING_RADIUS, SWATCH_SIZE, DEAD_ZONE = 70, 34, 22
+local ring, ringShown, ringCx, ringCy, ringPick
+
+local function SwatchColor(i)
+    local hex = SWATCHES[i][2]
+    if hex then return ColorFromHex(hex) end
+    local _, class = UnitClass("player")
+    local c = class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
+    if c then return { c.r, c.g, c.b } end
+    return { 0.2, 1, 0.6 }
+end
+
+local function BuildRing()
+    ring = CreateFrame("Frame", nil, UIParent)
+    ring:SetSize(1, 1)
+    ring:SetFrameStrata("TOOLTIP")
+    ring:Hide()
+    ring.swatch = {}
+    for i = 1, #SWATCHES do
+        local border = ring:CreateTexture(nil, "ARTWORK")
+        border:SetColorTexture(1, 1, 1, 1)
+        local tex = ring:CreateTexture(nil, "OVERLAY")
+        local c = SwatchColor(i)
+        tex:SetColorTexture(c[1], c[2], c[3], 1)
+        -- round: a circular mask on each (if this client has mask textures; otherwise they stay square)
+        if ring.CreateMaskTexture and tex.AddMaskTexture then
+            for _, t in ipairs({ tex, border }) do
+                local mask = ring:CreateMaskTexture()
+                mask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+                mask:SetAllPoints(t)
+                t:AddMaskTexture(mask)
+            end
+        end
+        ring.swatch[i] = { tex = tex, border = border }
+    end
+    -- the middle shows the colour in use right now (a white-rimmed disc)
+    ring.currentRim = ring:CreateTexture(nil, "ARTWORK")
+    ring.currentRim:SetColorTexture(1, 1, 1, 1)
+    ring.currentRim:SetSize(32, 32)
+    ring.currentRim:SetPoint("CENTER")
+    ring.current = ring:CreateTexture(nil, "OVERLAY")
+    ring.current:SetSize(26, 26)
+    ring.current:SetPoint("CENTER")
+    if ring.CreateMaskTexture and ring.current.AddMaskTexture then
+        for _, t in ipairs({ ring.currentRim, ring.current }) do
+            local mask = ring:CreateMaskTexture()
+            mask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+            mask:SetAllPoints(t)
+            t:AddMaskTexture(mask)
+        end
+    end
+end
+
+-- which swatch the cursor points at (nil in the middle)
+local function RingPick()
+    local px, py = GetCursorPosition()
+    local es = UIParent:GetEffectiveScale()
+    local dx, dy = px / es - ringCx, py / es - ringCy
+    if dx * dx + dy * dy < DEAD_ZONE ^ 2 then return nil end
+    local angle = math.atan2(dx, dy)   -- 0 = up, clockwise
+    if angle < 0 then angle = angle + 2 * math.pi end
+    return math.floor(angle / (2 * math.pi) * #SWATCHES + 0.5) % #SWATCHES + 1
+end
+
+local function LayoutRing()
+    for i, sw in ipairs(ring.swatch) do
+        local a = (i - 1) * 2 * math.pi / #SWATCHES
+        local size = (i == ringPick) and SWATCH_SIZE + 12 or SWATCH_SIZE
+        sw.tex:ClearAllPoints()
+        sw.tex:SetPoint("CENTER", ring, "CENTER", RING_RADIUS * math.sin(a), RING_RADIUS * math.cos(a))
+        sw.tex:SetSize(size, size)
+        sw.border:ClearAllPoints()
+        sw.border:SetPoint("CENTER", sw.tex, "CENTER")
+        sw.border:SetSize(size + 4, size + 4)
+        sw.border:SetShown(i == ringPick)
+    end
+end
+
+local function OverMap()
+    local sheet = _G.P13SheetFrame
+    if sheet and sheet:IsShown() then return sheet:IsMouseOver() end
+    local sc = WorldMapFrame and WorldMapFrame:IsShown() and WorldMapFrame.ScrollContainer
+    return sc and sc:IsMouseOver() or false
+end
+
+local ringDriver = CreateFrame("Frame")
+ringDriver:SetScript("OnUpdate", function()
+    local down = IsMouseButtonDown("RightButton")
+    if not ringShown then
+        -- open: Shift is held, the right button just went down over the map
+        if down and IsShiftKeyDown() and ns:Get("mapDraw") and ns:Get("mapDrawPicker") and OverMap() then
+            if not ring then BuildRing() end
+            local px, py = GetCursorPosition()
+            local es = UIParent:GetEffectiveScale()
+            ringCx, ringCy, ringPick = px / es, py / es, nil
+            ring:ClearAllPoints()
+            ring:SetPoint("CENTER", UIParent, "BOTTOMLEFT", ringCx, ringCy)
+            for i, sw in ipairs(ring.swatch) do   -- (the class colour can change with the character)
+                local c = SwatchColor(i)
+                sw.tex:SetColorTexture(c[1], c[2], c[3], 1)
+            end
+            local cur = MyColor()
+            ring.current:SetColorTexture(cur[1], cur[2], cur[3], 1)
+            ringShown = true
+            LayoutRing()
+            ring:Show()
+        end
+        return
+    end
+    if down then
+        local pick = RingPick()
+        if pick ~= ringPick then ringPick = pick; LayoutRing() end
+    else
+        ringShown = false
+        ring:Hide()
+        local pick = RingPick()
+        if pick then
+            P13TweaksDB.mapDrawColor = SWATCHES[pick][2]   -- nil = class colour
+        end
+    end
+end)
+
+---------------------------------------------------------------------------
+-- Brush thickness: Shift + mouse wheel on the map (or the tile map). A round preview of the thickness
+-- follows the cursor for a moment. A line being drawn changes thickness as you scroll; otherwise it
+-- sets the thickness of the next lines.
+---------------------------------------------------------------------------
+
+local preview, previewUntil
+
+function ns.DrawBrushWheel(delta)
+    -- wheel up = one size thicker, wheel down = one size thinner; stops at the ends (no wrapping round)
+    local t = BRUSHES[math.max(1, math.min(#BRUSHES, BrushIndex() + (delta > 0 and 1 or -1)))]
+    P13TweaksDB.mapDrawThickness = t
+    if current then current.th = t; Changed() end
+    if not preview then
+        preview = CreateFrame("Frame", nil, UIParent)
+        preview:SetFrameStrata("TOOLTIP")
+        preview.rim = preview:CreateTexture(nil, "ARTWORK")
+        preview.rim:SetColorTexture(1, 1, 1, 1)
+        preview.dot = preview:CreateTexture(nil, "OVERLAY")
+        if preview.CreateMaskTexture and preview.dot.AddMaskTexture then
+            for _, tx in ipairs({ preview.rim, preview.dot }) do
+                local mask = preview:CreateMaskTexture()
+                mask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+                mask:SetAllPoints(tx)
+                tx:AddMaskTexture(mask)
+            end
+        end
+        preview:SetScript("OnUpdate", function(self)
+            if GetTime() > previewUntil then self:Hide() return end
+            local px, py = GetCursorPosition()
+            local es = UIParent:GetEffectiveScale()
+            self:ClearAllPoints()
+            self:SetPoint("CENTER", UIParent, "BOTTOMLEFT", px / es, py / es)
+        end)
+    end
+    -- a line of t pixels is t * (the map's scale / the UI's scale) UI units wide
+    local sheet = _G.P13SheetFrame
+    local ref = (sheet and sheet:IsShown()) and sheet or WorldMapFrame
+    local size = t * ref:GetEffectiveScale() / UIParent:GetEffectiveScale()
+    local c = (current and current.color) or MyColor()
+    preview.dot:SetSize(size, size)
+    preview.dot:SetPoint("CENTER")
+    preview.dot:SetColorTexture(c[1], c[2], c[3], 1)
+    preview.rim:SetSize(size + 3, size + 3)
+    preview.rim:SetPoint("CENTER")
+    preview:SetSize(size + 3, size + 3)
+    previewUntil = GetTime() + 1.2
+    preview:Show()
+end
+
+---------------------------------------------------------------------------
 -- Options and commands
 ---------------------------------------------------------------------------
 
@@ -491,13 +872,31 @@ ns:RegisterOption({
     key = "mapDraw",
     type = "toggle",
     label = "Draw on the map and share it with my group",
-    tooltip = "Hold Shift and drag with the left mouse button on the world map to draw a line. Teammates who also have P13Tweaks see your lines on their map (and you see theirs), each in the sender's class colour. Undo and Clear mine buttons appear in the map's button row while you have lines. While Shift is held, dragging draws instead of panning the map.",
+    tooltip = "Hold Shift and drag with the left mouse button on the world map (or the tile map) to draw a line. Teammates who also have P13Tweaks see your lines on their map (and you see theirs), each in the sender's class colour. Undo and Clear mine buttons appear in the map's button row while you have lines. While Shift is held, dragging draws instead of panning the map.",
     default = true,
     onChange = function(on)
         if not on then SetDrawing(false) end
         RefreshCatcher()
         Changed()
     end,
+})
+
+ns:RegisterOption({
+    key = "mapDrawPicker",
+    type = "toggle",
+    label = "Colour ring: Shift + hold right button on the map",
+    tooltip = "Hold Shift, press and hold the right mouse button on the world map or the tile map, and a ring of colours opens around the cursor. Move toward one and let go to use it for new lines (the first one is your class colour). Shift + right-click then no longer goes back a map level; plain right-click still does.",
+    default = true,
+    onChange = function() RefreshCatcher() end,
+})
+
+ns:RegisterOption({
+    key = "mapDrawDebug",
+    type = "toggle",
+    label = "Show drawing point counts on the map (debug)",
+    tooltip = "A small line of text at the bottom of the world map and the tile map: how many points the line you are drawing has, how many points and lines there are in all, and the drawing step. Handy while checking how smooth lines are.",
+    default = true,
+    onChange = function() Changed() end,
 })
 
 ns:RegisterOption({
@@ -587,8 +986,11 @@ events:SetScript("OnEvent", function(_, event, a1, a2, a3, a4)
         catcher = CreateFrame("Frame", nil, sc)
         catcher:SetAllPoints(sc)
         catcher:SetFrameLevel(sc:GetFrameLevel() + 90)   -- under the button row (+100)
+        -- while Shift is held the catcher is up: Shift + wheel sets the line thickness instead of zooming
+        catcher:EnableMouseWheel(true)
+        catcher:SetScript("OnMouseWheel", function(_, delta) ns.DrawBrushWheel(delta) end)
         catcher:Hide()
-        if catcher.SetPassThroughButtons then pcall(catcher.SetPassThroughButtons, catcher, "RightButton") end
+        RefreshCatcher()   -- sets what right-click does while the catcher is on
         catcher:SetScript("OnMouseDown", function(_, button) if button == "LeftButton" then StartStroke() end end)
         catcher:SetScript("OnMouseUp", function(_, button) if button == "LeftButton" then EndStroke() end end)
         catcher:SetScript("OnHide", EndStroke)
@@ -627,8 +1029,15 @@ events:SetScript("OnEvent", function(_, event, a1, a2, a3, a4)
         clearAllBtn:Hide()
         ns:AddMapButton(clearAllBtn, 33)
 
+        local dbg = sc:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        dbg:SetPoint("BOTTOM", sc, "BOTTOM", 0, 6)
+        local dbgShown
         local poll = CreateFrame("Frame", nil, WorldMapFrame)
-        poll:SetScript("OnUpdate", function() Redraw(false) end)
+        poll:SetScript("OnUpdate", function()
+            Redraw(false)
+            local t = ns.SheetDraw.debugText() or ""
+            if t ~= dbgShown then dbgShown = t; dbg:SetText(t) end
+        end)
         poll:SetScript("OnShow", function() Redraw(true) end)
         WorldMapFrame:HookScript("OnHide", function() shiftHeld = false; SetDrawing(false) end)
 

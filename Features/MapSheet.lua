@@ -161,10 +161,143 @@ local function CentreOnPlayer(closeUp)
 end
 
 ---------------------------------------------------------------------------
+-- Shift + drag drawing (the same lines as the normal map: MapDraw.lua keeps and shares them)
+---------------------------------------------------------------------------
+
+local CONTINENT_MAP = { [0] = 1415, [1] = 1414 }   -- the continent map each world's lines are stored on
+local drawLayer, linePool, linesUsed = nil, {}, 0
+local dotPool, dotsUsed = {}, 0
+local lastDrawSig
+local drawingNow = false
+local debugText, debugShown           -- the point-count readout
+
+local function TileToMap(tx, ty)
+    local mapID = CONTINENT_MAP[world]
+    if not (mapID and C_Map.GetMapPosFromWorldPos and CreateVector2D) then return end
+    local _, pos = C_Map.GetMapPosFromWorldPos(world, CreateVector2D((32 - ty) * TILE_YARDS, (32 - tx) * TILE_YARDS), mapID)
+    if not pos then return end
+    local u, v = pos:GetXY()
+    if u and v then return mapID, u, v end
+end
+
+local function MapToTile(mapID, u, v)
+    local inst, wp = C_Map.GetWorldPosFromMapPos(mapID, CreateVector2D(u, v))
+    if inst ~= world or not wp then return end
+    local wx, wy = wp:GetXY()
+    return 32 - wy / TILE_YARDS, 32 - wx / TILE_YARDS
+end
+
+-- For other files that draw on the sheet (MapSheetQuests.lua): add a function to ns.SheetHooks and it is
+-- called every frame the sheet is open as fn(view, cx, cy, zoom, width, height, world); ns.SheetMapToTile(mapID, u, v)
+-- gives the tile position (in the world being shown) of a point on a game map.
+ns.SheetHooks = {}
+ns.SheetMapToTile = MapToTile
+
+-- The stroke's points as tile positions (kept until the stroke grows).
+local function StrokeTiles(s)
+    local c = s.sheet
+    if c and c.world == world and c.n == #s.pts then return c.pts or nil end
+    local out = {}
+    for i, p in ipairs(s.pts) do
+        local tx, ty = MapToTile(s.map, p[1], p[2])
+        if not tx then out = nil break end
+        out[i] = { tx, ty }
+    end
+    s.sheet = { world = world, n = #s.pts, pts = out or false }
+    return out
+end
+
+local function CursorTile()
+    local sx, sy = CursorOffset()
+    return cx + sx / zoom, cy + sy / zoom
+end
+
+local function DrawLines()
+    local sd = ns.SheetDraw
+    if not (sd and drawLayer) then return end
+    local on = sd.enabled()
+    local w, h = view:GetWidth(), view:GetHeight()
+    local sig = ("%d:%.4f:%.4f:%.3f:%d:%d:%s:%s"):format(sd.version(), cx, cy, zoom, w or 0, h or 0, tostring(world), tostring(on))
+    -- (lines fade over time: look again every few seconds even when nothing moved)
+    sig = sig .. ":" .. math.floor(GetTime() / 3)
+    if sig == lastDrawSig then return end
+    lastDrawSig = sig
+
+    for i = 1, linesUsed do linePool[i]:Hide() end
+    linesUsed = 0
+    for i = 1, dotsUsed do dotPool[i]:Hide() end
+    dotsUsed = 0
+    if not (on and world) then return end
+    local list = sd.strokes()
+    for si, s in ipairs(list) do
+        local pts = StrokeTiles(s)
+        if pts and #pts >= 2 then
+            local lyr, sub = sd.slotLayer(si, #list)   -- later lines sit on top of earlier ones
+            local alpha = sd.alpha(s)
+            for i = 2, #pts do
+                if linesUsed >= 3000 then break end
+                linesUsed = linesUsed + 1
+                local l = linePool[linesUsed]
+                if not l then l = drawLayer:CreateLine(nil, "OVERLAY"); linePool[linesUsed] = l end
+                local a, b = pts[i - 1], pts[i]
+                l:SetDrawLayer(lyr, sub)
+                l:SetThickness(sd.thicknessOf(s))
+                l:SetColorTexture(s.color[1], s.color[2], s.color[3], alpha)
+                l:SetStartPoint("TOPLEFT", view, (a[1] - cx) * zoom + w / 2, -((a[2] - cy) * zoom + h / 2))
+                l:SetEndPoint("TOPLEFT", view, (b[1] - cx) * zoom + w / 2, -((b[2] - cy) * zoom + h / 2))
+                l:Show()
+            end
+            -- round dots where the segments meet fill the gaps thick flat-ended lines leave (see MapDraw)
+            local th = sd.thicknessOf(s)
+            if th >= sd.dotFrom then
+                for i = 1, #pts do
+                    if dotsUsed >= 3000 then break end
+                    dotsUsed = dotsUsed + 1
+                    local d = dotPool[dotsUsed]
+                    if not d then d = sd.makeDot(drawLayer); dotPool[dotsUsed] = d end
+                    d:SetDrawLayer(lyr, sub)
+                    d:SetSize(th, th)
+                    d:ClearAllPoints()
+                    d:SetPoint("CENTER", view, "TOPLEFT", (pts[i][1] - cx) * zoom + w / 2, -((pts[i][2] - cy) * zoom + h / 2))
+                    d:SetColorTexture(s.color[1], s.color[2], s.color[3], alpha)
+                    d:Show()
+                end
+            end
+        end
+    end
+end
+
+local function EndDraw()
+    if drawingNow then
+        drawingNow = false
+        if ns.SheetDraw then ns.SheetDraw.finish() end
+    end
+end
+
+---------------------------------------------------------------------------
 -- The window
 ---------------------------------------------------------------------------
 
 local function OnUpdate(_, dt)
+    if drawingNow then
+        if not IsMouseButtonDown("LeftButton") then
+            EndDraw()
+        else
+            -- MapDraw decides whether the cursor has moved far enough for a new point; it needs to know how
+            -- many screen pixels the continent map is across right now (worked out from one tile's worth)
+            local tx, ty = CursorTile()
+            local mapID, u, v = TileToMap(tx, ty)
+            local _, u2, v2 = TileToMap(tx + 1, ty + 1)
+            if mapID and u2 and math.abs(u2 - u) > 1e-9 and math.abs(v2 - v) > 1e-9 then
+                ns.SheetDraw.add(u, v, zoom / math.abs(u2 - u), zoom / math.abs(v2 - v))
+            end
+        end
+    end
+    if debugText and ns.SheetDraw then
+        local t = ns.SheetDraw.debugText()
+        t = t and (t .. " | " .. linesUsed .. " segments here") or ""
+        if t ~= debugShown then debugShown = t; debugText:SetText(t) end
+    end
     if dragging then
         local px, py = GetCursorPosition()
         local es = view:GetEffectiveScale()
@@ -184,6 +317,11 @@ local function OnUpdate(_, dt)
 
     cx, cy = Clamp(cx, minCol - 4, maxCol + 5), Clamp(cy, minRow - 4, maxRow + 5)
     Draw()
+    DrawLines()
+    do
+        local vw, vh = view:GetWidth(), view:GetHeight()
+        for _, hook in ipairs(ns.SheetHooks) do hook(view, cx, cy, zoom, vw, vh, world) end
+    end
 
     -- the player's arrow
     local w, h = view:GetWidth(), view:GetHeight()
@@ -206,12 +344,23 @@ local function OnUpdate(_, dt)
     end
 end
 
+-- Full screen (the whole UI area) or a window 80% of the screen, movable.
+local function ApplySize()
+    if not frame then return end
+    frame:ClearAllPoints()
+    if ns:Get("mapSheetFull") then
+        frame:SetAllPoints(UIParent)
+    else
+        frame:SetSize(math.floor(UIParent:GetWidth() * 0.8), math.floor(UIParent:GetHeight() * 0.8))
+        frame:SetPoint("CENTER")
+    end
+end
+
 local function Build()
     if frame then return end
     frame = CreateFrame("Frame", "P13SheetFrame", UIParent, BackdropTemplateMixin and "BackdropTemplate" or nil)
-    frame:SetSize(math.floor(UIParent:GetWidth() * 0.8), math.floor(UIParent:GetHeight() * 0.8))
-    frame:SetPoint("CENTER")
-    frame:SetFrameStrata("HIGH")
+    ApplySize()
+    frame:SetFrameStrata("FULLSCREEN_DIALOG")
     frame:SetMovable(true)
     frame:SetClampedToScreen(true)
     if frame.SetBackdrop then
@@ -230,7 +379,7 @@ local function Build()
     drag:SetHeight(26)
     drag:EnableMouse(true)
     drag:RegisterForDrag("LeftButton")
-    drag:SetScript("OnDragStart", function() frame:StartMoving() end)
+    drag:SetScript("OnDragStart", function() if not ns:Get("mapSheetFull") then frame:StartMoving() end end)
     drag:SetScript("OnDragStop", function() frame:StopMovingOrSizing() end)
 
     local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
@@ -278,12 +427,21 @@ local function Build()
     coordText:SetPoint("BOTTOMLEFT", 6, 4)
 
     view:SetScript("OnMouseWheel", function(_, delta)
+        -- Shift + wheel = line thickness (MapDraw), not zoom
+        if IsShiftKeyDown() and ns.SheetDraw and ns.SheetDraw.enabled() then ns.SheetDraw.wheel(delta) return end
         local sx, sy = CursorOffset()
         anchorTx, anchorTy, anchorSx, anchorSy = cx + sx / zoom, cy + sy / zoom, sx, sy
         zoomTarget = Clamp(zoomTarget * (delta > 0 and WHEEL_STEP or 1 / WHEEL_STEP), minZoom, MAX_ZOOM)
     end)
     view:SetScript("OnMouseDown", function(_, button)
-        if button == "LeftButton" then
+        if button == "LeftButton" and IsShiftKeyDown() and ns.SheetDraw and ns.SheetDraw.enabled() then
+            local mapID, u, v = TileToMap(CursorTile())
+            if mapID then
+                ns.SheetDraw.begin(mapID, u, v)
+                drawingNow = true
+                dragging = false
+            end
+        elseif button == "LeftButton" then
             dragging = true
             dragPx, dragPy = GetCursorPosition()
             dragCx, dragCy = cx, cy
@@ -291,7 +449,29 @@ local function Build()
             CentreOnPlayer(true)
         end
     end)
-    view:SetScript("OnMouseUp", function() dragging = false end)
+    view:SetScript("OnMouseUp", function() dragging = false; EndDraw() end)
+    frame:SetScript("OnHide", EndDraw)
+
+    -- lines drawn on this sheet (above the tiles and the arrow, below the buttons)
+    drawLayer = CreateFrame("Frame", nil, view)
+    drawLayer:SetAllPoints(view)
+    drawLayer:SetFrameLevel(view:GetFrameLevel() + 5)
+    debugText = drawLayer:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    debugText:SetPoint("BOTTOMRIGHT", view, "BOTTOMRIGHT", -8, 6)
+
+    -- Undo / Clear mine, top right (the normal map's buttons aren't visible here)
+    local function SmallButton(text, width, fn, rightOf)
+        local b = CreateFrame("Button", nil, bar, "UIPanelButtonTemplate")
+        b:SetSize(width, 20)
+        b:SetText(text)
+        b:SetScript("OnClick", fn)
+        return b
+    end
+    local clearB = SmallButton("Clear mine", 80, function() if ns.SheetDraw then ns.SheetDraw.clearMine() end end)
+    clearB:SetPoint("LEFT", prev, "RIGHT", 16, 0)
+    local undoB = SmallButton("Undo", 56, function() if ns.SheetDraw then ns.SheetDraw.undo() end end)
+    undoB:SetPoint("LEFT", clearB, "RIGHT", 4, 0)
+    bar:SetWidth(700)
     view:SetScript("OnUpdate", OnUpdate)
 
     frame:Hide()
@@ -323,6 +503,15 @@ ns:RegisterOption({
         if not v and frame then frame:Hide() end
         if ns.sheetButton then ns.sheetButton:SetShown(v and true or false) end
     end,
+})
+
+ns:RegisterOption({
+    key = "mapSheetFull",
+    type = "toggle",
+    label = "Tile map fills the whole screen",
+    tooltip = "Opens the tile map over the entire screen instead of a window 80% of its size. Escape closes it.",
+    default = true,
+    onChange = ApplySize,
 })
 
 local loader = CreateFrame("Frame")

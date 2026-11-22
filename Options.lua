@@ -10,11 +10,11 @@ local ADDON_NAME, ns = ...
 
 local LAYOUT = {
     { name = "Map", icon = "Interface\\Icons\\INV_Misc_Map_01", sections = {
-        { "Zooming", { "mapSheetZoom", "mapSeamless", "mapZoomStep", "mapExtraZoomIn", "mapRemember" } },
+        { "Zooming", { "mapSheetZoom", "mapSheet", "mapSheetFull", "mapSeamless", "mapZoomStep", "mapExtraZoomIn", "mapRemember" } },
         { "Finding yourself", { "mapPlayerCircle", "mapMiddleClick", "mapSmoothPan" } },
-        { "Look", { "mapTerrain", "mapTerrainLabels", "mapTerrainButton", "mapCaveView" } },
+        { "Look", { "mapSheetQuests", "mapSheetQuestsNative", "mapTerrain", "mapTerrainLabels", "mapTerrainButton", "mapCaveView" } },
         { "Travel", { "mapRoute", "flightPoints", "flightPointsTaxi" } },
-        { "Drawing", { "mapDraw", "mapDrawFade" } },
+        { "Drawing", { "mapDraw", "mapDrawPicker", "mapDrawFade", "mapDrawDebug" } },
         { "Teammates' quests", { "mapQuestHints", "mapQuestHintsHas" } },
     } },
     { name = "Combat", icon = "Interface\\Icons\\Ability_DualWield", sections = {

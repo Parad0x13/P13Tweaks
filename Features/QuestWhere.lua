@@ -194,16 +194,19 @@ function ns.QuestGiverPoints(id) return PointsFor(id, "startedBy") end
 -- Where the quest's work is done: the spawn points of the creatures to kill, the creatures that drop the items to
 -- collect and the objects to use, from QuestieDB's objectives (up to 60 points; at most 6 per creature). Falls back
 -- to the hand-in point for quests with nothing to kill or collect. Used by MapQuestHints.lua for quests you have.
-local objCache = {}
-function ns.QuestObjectivePoints(id)
-    local cached = objCache[id]
+local objCache, objCacheAll = {}, {}
+-- all = true: every spawn point (up to 400), not the thinned-out 60 - for working out the shape of an area
+function ns.QuestObjectivePoints(id, all)
+    local cache = all and objCacheAll or objCache
+    local cached = cache[id]
     if cached then return cached end
     local lib = Lib()
     if not lib then return {} end
     local areaMap = ns.LoadAreaMap and ns.LoadAreaMap() or {}
     local points = {}
+    local LIMIT = all and 400 or 60
     local function Spawns(db, objId)
-        if not db or #points >= 60 then return end
+        if not db or #points >= LIMIT then return end
         local spawns = Get(db, objId, "spawns")
         if type(spawns) ~= "table" then return end
         local name = Get(db, objId, "name")
@@ -218,9 +221,9 @@ function ns.QuestObjectivePoints(id)
                 end
             end
         end
-        local step = math.max(1, math.ceil(#mine / 6))   -- spread at most 6 points over all of this creature's spawns
+        local step = all and 1 or math.max(1, math.ceil(#mine / 6))   -- spread at most 6 points over all of this creature's spawns
         for i = 1, #mine, step do
-            if #points < 60 then points[#points + 1] = mine[i] end
+            if #points < LIMIT then points[#points + 1] = mine[i] end
         end
     end
     local npcs, objs = {}, {}
@@ -243,8 +246,37 @@ function ns.QuestObjectivePoints(id)
     for _, n in ipairs(npcs) do Spawns(lib.Npc, n) end
     if lib.Object then for _, ob in ipairs(objs) do Spawns(lib.Object, ob) end end
     if #points == 0 then points = ns.QuestFinisherPoints(id) end
-    objCache[id] = points
+    cache[id] = points
     return points
+end
+
+-- "Go to this area" quests (QuestieDB's triggerEnd): { { uiMap =, pts = { {x, y}, ... } }, ... } - the points of each area
+-- in the order QuestieDB lists them (x, y are 0-100 on that map). MapSheetQuests.lua joins them up and fills them in.
+local polyCache = {}
+function ns.QuestAreaPolys(id)
+    if polyCache[id] then return polyCache[id] end
+    local lib = Lib()
+    if not lib then return {} end
+    local out = {}
+    local te = Get(lib.Quest, id, "triggerEnd")
+    local spawns = type(te) == "table" and te[2]
+    if type(spawns) == "table" then
+        local areaMap = ns.LoadAreaMap and ns.LoadAreaMap() or {}
+        for area, pts in pairs(spawns) do
+            local uiMap = areaMap[area]
+            if uiMap and uiMap ~= 0 and type(pts) == "table" then
+                local poly = { uiMap = uiMap, pts = {} }
+                for _, pt in ipairs(pts) do
+                    if type(pt) == "table" and pt[1] and pt[2] and pt[1] >= 0 and pt[2] >= 0 then
+                        poly.pts[#poly.pts + 1] = { pt[1], pt[2] }
+                    end
+                end
+                if #poly.pts > 0 then out[#out + 1] = poly end
+            end
+        end
+    end
+    polyCache[id] = out
+    return out
 end
 
 -- Where a quest is turned in (falls back to where it's given if QuestieDB doesn't say).
