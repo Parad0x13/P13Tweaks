@@ -1,4 +1,10 @@
-# P13Tweaks – Handoff (2026-11-22, v0.30.37)
+# P13Tweaks – Handoff (2026-11-22, v0.30.38)
+
+## v0.30.38 (2026-11-22) - map reopens where it was closed (MapMemory)
+User report: the zoomed-in map didn't reopen at the same place. Not tested in game yet.
+- `Restore()` placed the view with `InstantPanAndZoom` only, which clamps the pan to the game's narrow scroll extents. Now it also does what `SwitchTo` does: `ns.WidenMapLimits(sc)`, sets the normalized scroll directly, `ns.SyncPlayerPin()`, then `AdoptMapView` + `RefreshMapLayers`.
+- The single 0.2 s width re-check is replaced: for 1 s after opening, every ScrollContainer `OnSizeChanged` re-restores (next frame, coalesced), plus one unconditional restore at +0.3 s. `MapFrameDrag.ApplyWidth` calls `ns.RestoreMapViewIfOpening()` after its `OnFrameSizeChanged` re-fit (which can reset the view).
+- `Version.lua` had drifted to 0.30.7; now matches the .toc again.
 
 ## v0.30.34 - v0.30.37 (2026-11-22) - secret-value errors, terrain in open-air dungeons, button row vs coords text
 Nothing here was run by a Lua interpreter or tested in game yet.

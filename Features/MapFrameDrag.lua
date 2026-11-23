@@ -137,6 +137,8 @@ local function ApplyWidth()
             f:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 0, gap)
             if badSize and f.OnFrameSizeChanged then f:OnFrameSizeChanged() end   -- map re-fits the new size
             applying = false
+            -- the re-fit can reset the view: while the map is just opening, MapMemory puts it back where you left it
+            if badSize and ns.RestoreMapViewIfOpening then ns.RestoreMapViewIfOpening() end
         end
     elseif widened then
         -- no longer maximized (or the option went off): if the game has not already put its own width back, do it

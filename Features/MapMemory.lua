@@ -73,8 +73,18 @@ local function Restore()
         x, y = s.x, s.y
     end
     sc:InstantPanAndZoom(exact and s.scale or ScaleToRestore(s, sc), x, y, true)
+    -- InstantPanAndZoom clamps the pan to the game's own narrow limits (zoomed out, only a little around the
+    -- middle), so the map opened off from where you left it. Open the limits up the same way the map-level
+    -- switches do and put the scroll exactly back.
+    if ns.WidenMapLimits then ns.WidenMapLimits(sc) end
+    if sc.SetNormalizedHorizontalScroll and sc.SetNormalizedVerticalScroll then
+        sc:SetNormalizedHorizontalScroll(x)
+        sc:SetNormalizedVerticalScroll(y)
+    end
+    if ns.SyncPlayerPin then ns.SyncPlayerPin() end
     -- tell the tile-map zoom this was a placement, not a request to glide there
     if ns.AdoptMapView then ns.AdoptMapView() end
+    if ns.RefreshMapLayers then ns.RefreshMapLayers() end
 end
 
 ns:RegisterOption({
@@ -92,16 +102,26 @@ loader:SetScript("OnEvent", function()
     if not (sc and sc.InstantPanAndZoom and sc.GetNormalizedHorizontalScroll) then return end
     WorldMapFrame:HookScript("OnHide", Save)
     -- Wait one frame so Blizzard finishes its own open/reset first, then apply ours. The map pane can still be
-    -- changing size then (maximized / windowed is applied as the window opens): if its size is different a
-    -- moment later, put the view back once more, so it is worked out for the final size.
+    -- changing size for a moment after that (maximized / windowed is applied as the window opens, and the
+    -- full-screen stretch in MapFrameDrag resizes it and makes the map re-fit, which resets the view): every
+    -- time the pane changes size in the first second, put the view back again, worked out for the new size.
+    local openedAt = 0
+    local pending = false
+    local function RestoreSoon()
+        if pending then return end
+        pending = true
+        C_Timer.After(0, function() pending = false; Restore() end)
+    end
     WorldMapFrame:HookScript("OnShow", function()
-        C_Timer.After(0, function()
-            local w = Scroll() and Scroll():GetWidth() or 0
-            Restore()
-            C_Timer.After(0.2, function()
-                local sc = Scroll()
-                if sc and WorldMapFrame:IsShown() and math.abs(sc:GetWidth() - w) > 1 then Restore() end
-            end)
-        end)
+        openedAt = GetTime()
+        RestoreSoon()
+        C_Timer.After(0.3, function() if WorldMapFrame:IsShown() then Restore() end end)
     end)
+    sc:HookScript("OnSizeChanged", function()
+        if WorldMapFrame:IsShown() and GetTime() - openedAt < 1 then RestoreSoon() end
+    end)
+    -- the full-screen stretch tells the map to re-fit (MapFrameDrag): that resets the view, so put it back
+    ns.RestoreMapViewIfOpening = function()
+        if WorldMapFrame:IsShown() and GetTime() - openedAt < 1 then RestoreSoon() end
+    end
 end)
