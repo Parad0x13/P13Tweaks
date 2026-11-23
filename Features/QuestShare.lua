@@ -2155,17 +2155,23 @@ local function AddProgress(tt, name)
     if added then tt:Show() end
 end
 
+-- Tooltip names/units can be "secret" values (e.g. world-cursor tooltips in
+-- combat): tainted code may not pass them to UnitIsPlayer or string functions.
+local IsSecret = issecretvalue or function() return false end
+
 local function OnUnitTooltip(tt)
     if tt ~= GameTooltip then return end
     local ok, name, unit = pcall(tt.GetUnit, tt)
-    if not ok or not unit or UnitIsPlayer(unit) then return end
+    if not ok or not unit or IsSecret(unit) or IsSecret(name) then return end
+    local okP, isPlayer = pcall(UnitIsPlayer, unit)
+    if not okP or IsSecret(isPlayer) or isPlayer then return end
     AddProgress(tt, name)
 end
 
 local function OnItemTooltip(tt)
     if tt ~= GameTooltip and tt ~= ItemRefTooltip then return end
     local ok, name = pcall(tt.GetItem, tt)
-    if ok then AddProgress(tt, name) end
+    if ok and not IsSecret(name) then AddProgress(tt, name) end
 end
 
 local function HookTooltips()

@@ -12,7 +12,7 @@ local LAYOUT = {
     { name = "Map", icon = "Interface\\Icons\\INV_Misc_Map_01", sections = {
         { "Zooming", { "mapSheetZoom", "mapSheet", "mapSheetFull", "mapSeamless", "mapExtraZoomIn", "mapRemember" } },
         { "Finding yourself", { "mapPlayerCircle", "mapMiddleClick", "mapSmoothPan" } },
-        { "Look", { "mapSheetQuests", "mapSheetQuestsNative", "mapTerrain", "mapTerrainLabels", "mapTerrainBlackSea", "mapTerrainButton", "mapCaveView", "mapFrameDrag", "mapBorderHide", "mapFullWidth" } },
+        { "Look", { "mapSheetQuests", "mapSheetQuestsNative", "mapTerrain", "mapTerrainDungeons", "mapTerrainLabels", "mapTerrainBlackSea", "mapTerrainButton", "mapCaveView", "mapFrameDrag", "mapBorderHide", "mapFullWidth" } },
         { "Travel", { "mapRoute", "flightPoints", "flightPointsTaxi" } },
         { "Drawing", { "mapDraw", "mapDrawErase", "mapDrawKeep", "mapDrawMinimap", "mapDrawPicker", "mapDrawFade", "mapDrawDebug" } },
         { "Teammates' quests", { "mapQuestHints", "mapQuestHintsHas" } },

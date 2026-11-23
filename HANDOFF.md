@@ -1,4 +1,21 @@
-# P13Tweaks – Handoff (2026-11-22, v0.30.33)
+# P13Tweaks – Handoff (2026-11-22, v0.30.37)
+
+## v0.30.34 - v0.30.37 (2026-11-22) - secret-value errors, terrain in open-air dungeons, button row vs coords text
+Nothing here was run by a Lua interpreter or tested in game yet.
+
+**Secret-value errors (WoW Forever "secret" values, see open item 6 below)**
+- `QuestShare.lua` `OnUnitTooltip`/`OnItemTooltip`: world-cursor tooltips can hand back a secret unit/name; skip if `issecretvalue`, `UnitIsPlayer` pcall'd. Teammate progress lines just don't show on such tooltips.
+- `TaggedMarks.lua`: `UnitGUID` returns secret GUIDs -> "indexed assignment with secret keys". No more GUID set: `TaggedTargets()` collects the teammates' target TOKENS (`party1target`...) and each nameplate is matched with `UnitIsUnit(plate, token)`; every unit call goes through `Yes()` (pcall, secret = no). **Unconfirmed**: if `UnitIsUnit` is itself secret in combat, the skulls won't show mid-fight (no error) - needs another approach then.
+
+**Real terrain in open-air dungeons/raids (option `mapTerrainDungeons`, Map > Look, default on)**
+- `tools/gen_terrain_data.py`: new `DUNGEONS` table (world id -> .wdt FDID, name), written as `ns.TerrainDungeons` in `MapTerrainData.lua`; asserts every tile picture of a listed dungeon is in the local client. EK/Kalimdor/Zephras output unchanged.
+- WDT FDIDs and instance types came from the client's own `Map.db2` (FDID 1349477; locale-specific in root, some BLTE blocks encrypted 'E' -> zero-filled; WDC5, string offsets needed a -352 fix-up). Probe scripts were in the session scratchpad, not the repo.
+- Survey of every dungeon/raid (tiles rendered to images and looked at): WMO-only instances have no terrain tiles at all (WC, BRD, BRS, MC, Onyxia, Gnomeregan, Uldaman, Maraudon, RFC, DM, Stockade, BFD, ST). Indoor ADT ones only show the ground ABOVE them (Scholomance = Caer Darrow, Deadmines, SFK, BWL, Naxx, RFD, Starfall Barrow Den, Karazhan Crypts, Hall of Thanes, Shadow Hold) - excluded. Caverns of Time, Nightmare Grove, Excavation Site have tiles missing locally - excluded. Included: RFK, Scarlet Monastery, ZF, ZG, Strat, AQ20, AQ40 and Forever's 2720/2784/2789/2791/2804/2807/2853/2856/2902/2959/2999.
+- `MapTerrain.lua` `Bounds()`: also accepts `UIMapType.Dungeon` maps when `GetWorldPosFromMapPos`'s instance is in `ns.TerrainDungeons` and the option is on (option change wipes `boundsCache`/`segCache`). **Unconfirmed**: that the game returns world positions for dungeon uiMaps; if not, they just stay painted. Test in ZF/Strat.
+
+**Map button row vs coordinates text (`Core.lua` `BottomBarClearance`)**: the old test only lifted above WIDE bars (>150); the game's "Player: x, y" coord text (moved into the map's bottom edge by Leatrix Maps, or the game's own when Leatrix is off) is a narrow frame, so `buttonLift` stayed 0. Now: any shown frame < 60 tall overlapping the row's own x-range at the bottom, plus `WorldMapFrame.overlayFrames[*].PlayerCoords/CursorCoords/CrosshairCoords` checked directly. Unconfirmed.
+
+Note: zone levels on hover come from Leatrix Maps ("Show zone levels"); the user had Leatrix Maps disabled - not our bug.
 
 ## v0.30.27 - v0.30.33 (2026-11-22) - maximized map fills the screen, cave view opt-in, button row clears Leatrix bar
 Tested by the user in game via screenshots (`offcenter.png`, `offcenter2.png`, `badbuttons.png` on the desktop) and the `mapSizeLog` dump.

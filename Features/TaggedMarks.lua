@@ -10,22 +10,30 @@ local TICK = 0.2
 
 local function On() return ns:Get("taggedMarks") end
 
--- GUIDs of the enemies my group members are targeting right now.
-local function TaggedGuids()
-    local set = {}
-    if not IsInGroup() then return set end
+-- Unit results can be "secret" values (GUIDs especially): tainted code can't use them as table keys or test them.
+-- So instead of collecting GUIDs we keep the teammates' target unit tokens and compare units with UnitIsUnit,
+-- treating any secret or failed answer as "no".
+local IsSecret = issecretvalue or function() return false end
+local function Yes(fn, ...)
+    local ok, r = pcall(fn, ...)
+    return ok and not IsSecret(r) and r and true or false
+end
+
+-- Unit tokens ("party1target", ...) of the enemies my group members are targeting right now.
+local function TaggedTargets()
+    local list = {}
+    if not IsInGroup() then return list end
     local raid = IsInRaid()
     for i = 1, (GetNumGroupMembers() or 0) do
         local unit = raid and ("raid" .. i) or ("party" .. i)
-        if UnitExists(unit) and not UnitIsUnit(unit, "player") then
+        if Yes(UnitExists, unit) and not Yes(UnitIsUnit, unit, "player") then
             local t = unit .. "target"
-            if UnitExists(t) and not UnitIsDead(t) and UnitCanAttack("player", t) then
-                local guid = UnitGUID(t)
-                if guid then set[guid] = true end
+            if Yes(UnitExists, t) and not Yes(UnitIsDead, t) and Yes(UnitCanAttack, "player", t) then
+                list[#list + 1] = t
             end
         end
     end
-    return set
+    return list
 end
 
 local function IconFor(plate)
@@ -50,13 +58,14 @@ local function Update()
         for _, plate in ipairs(plates) do if plate.p13Skull then plate.p13Skull:Hide() end end
         return
     end
-    local tagged = TaggedGuids()
+    local tagged = TaggedTargets()
     for _, plate in ipairs(plates) do
         local unit = plate.namePlateUnitToken or (plate.UnitFrame and plate.UnitFrame.unit)
         local show = false
-        if unit and next(tagged) ~= nil then
-            local guid = UnitGUID(unit)
-            show = guid and tagged[guid] and not UnitIsDead(unit) and true or false
+        if unit and not IsSecret(unit) and #tagged > 0 and not Yes(UnitIsDead, unit) then
+            for _, t in ipairs(tagged) do
+                if Yes(UnitIsUnit, unit, t) then show = true break end
+            end
         end
         if show then
             IconFor(plate):Show()

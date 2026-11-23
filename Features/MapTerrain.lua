@@ -1,7 +1,8 @@
 -- P13Tweaks feature: real terrain on the world map.
 -- Draws the game's own minimap terrain tiles (the same pictures the minimap uses) over the
 -- painted continent and zone maps of Kalimdor and the Eastern Kingdoms, and Forever's
--- Zephras Isle (its own world, instance 2991). Any world in ns.TerrainTiles works. Only tiles in view are
+-- Zephras Isle (its own world, instance 2991), and the game's maps of the open-air dungeons and raids
+-- in ns.TerrainDungeons. Any world in ns.TerrainTiles works. Only tiles in view are
 -- loaded, so it stays smooth while you zoom and pan. Pins (quests, flight points, trainers...)
 -- sit on top as usual, since the tiles use the same world coordinates.
 --
@@ -48,15 +49,21 @@ end
 ---------------------------------------------------------------------------
 
 -- World yards at the map's top-left and bottom-right corners, if it's a Kalimdor or
--- Eastern Kingdoms continent or zone map we have tiles for.
+-- Eastern Kingdoms continent or zone map we have tiles for, or the game's map of one of the
+-- open-air dungeons/raids in ns.TerrainDungeons (option mapTerrainDungeons).
+local MAP_TYPE_DUNGEON = Enum and Enum.UIMapType and Enum.UIMapType.Dungeon or 4
 local function Bounds(mapID)
     if boundsCache[mapID] ~= nil then return boundsCache[mapID] end
     local result = false
     local info = C_Map.GetMapInfo and C_Map.GetMapInfo(mapID)
-    if info and (info.mapType == MAP_TYPE_CONTINENT or info.mapType == MAP_TYPE_ZONE)
+    local dungeon = info and info.mapType == MAP_TYPE_DUNGEON
+    if info and (info.mapType == MAP_TYPE_CONTINENT or info.mapType == MAP_TYPE_ZONE or dungeon)
         and C_Map.GetWorldPosFromMapPos and CreateVector2D then
         local c1, tl = C_Map.GetWorldPosFromMapPos(mapID, CreateVector2D(0, 0))
         local c2, br = C_Map.GetWorldPosFromMapPos(mapID, CreateVector2D(1, 1))
+        if dungeon and not (c1 and ns.TerrainDungeons and ns.TerrainDungeons[c1] and ns:Get("mapTerrainDungeons")) then
+            c1 = nil   -- (dungeon maps only for the listed instances; the cache is cleared when the option changes)
+        end
         if c1 and c1 == c2 and ns.TerrainTiles and ns.TerrainTiles[c1] and tl and br then
             local top, left = tl:GetXY()
             local bottom, right = br:GetXY()
@@ -382,9 +389,22 @@ ns:RegisterOption({
     numberKey = "mapTerrainAlpha",
     numberDefault = 100,
     min = 10, max = 100, step = 5,
-    tooltip = "Kalimdor and Eastern Kingdoms continent and zone maps, and the map of the whole world, show the real terrain (the same pictures the minimap uses) instead of the painted map, so zooming in and out looks like one detailed map. Lower the opacity to let the painted map show through. Dungeons and other worlds keep the normal map.",
+    tooltip = "Kalimdor and Eastern Kingdoms continent and zone maps, and the map of the whole world, show the real terrain (the same pictures the minimap uses) instead of the painted map, so zooming in and out looks like one detailed map. Lower the opacity to let the painted map show through. Open-air dungeons and raids get it too (see the next option); other dungeons and worlds keep the normal map.",
     default = true,
     onChange = function() Refresh(true) end,
+})
+
+ns:RegisterOption({
+    key = "mapTerrainDungeons",
+    type = "toggle",
+    label = "Real terrain in open-air dungeons and raids",
+    tooltip = "With real terrain on, the game's map of an open-air instance shows the terrain too: Zul'Farrak, Stratholme, Scarlet Monastery, Razorfen Kraul, Zul'Gurub, both Ahn'Qiraj raids, and Forever's own instances that have it (Searing Basin, Demon Fall Canyon, Tainted Scar, Storm Cliffs, Crystal Vale, Burning of Andorhal, Deadwind Pass, Scarlet Enclave, Scarab Dais, City of Dalaran, Ruins of Lordaeron).\n\nIndoor dungeons keep the game's dungeon map: their terrain pictures only show the ground above them, or don't exist.",
+    default = true,
+    onChange = function()
+        wipe(boundsCache)
+        wipe(segCache)
+        Refresh(true)
+    end,
 })
 
 ns:RegisterOption({

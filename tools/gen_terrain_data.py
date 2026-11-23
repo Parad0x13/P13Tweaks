@@ -19,6 +19,32 @@ WOW = os.environ.get("WOW_DIR", r"C:\Program Files (x86)\World of Warcraft")
 PRODUCT = "wowf"
 # world (instance) id -> file data id of world/maps/<folder>/<folder>.wdt
 WDT = {0: 775971, 1: 782779, 2991: 7198644}
+# Dungeons and raids whose terrain tiles actually show the place (open-air instances). Picked by looking at
+# every instance's tiles (2026-11-22): indoor dungeons (Scholomance, Deadmines, Shadowfang Keep, BWL, Naxxramas,
+# ...) only have the ground ABOVE them, and many have no terrain tiles at all - those keep the game's dungeon map.
+# Left out because some of their tiles aren't in this client: Caverns of Time, Nightmare Grove, Excavation Site.
+# World id -> (.wdt file data id, name); both from the client's own Map.db2 (fields Directory/MapName/WdtFileDataID).
+DUNGEONS = {
+    47: (790640, "Razorfen Kraul"),
+    189: (788662, "Scarlet Monastery"),
+    209: (791169, "Zul'Farrak"),
+    309: (791432, "Zul'Gurub"),
+    329: (791063, "Stratholme"),
+    509: (775637, "Ruins of Ahn'Qiraj"),
+    531: (775840, "Ahn'Qiraj Temple"),
+    2720: (5554791, "The Searing Basin"),
+    2784: (5900942, "Demon Fall Canyon"),
+    2789: (5922434, "The Tainted Scar"),
+    2791: (5930564, "Storm Cliffs"),
+    2804: (6081492, "The Crystal Vale"),
+    2807: (6099634, "Burning of Andorhal"),
+    2853: (6357503, "Deadwind Pass"),
+    2856: (6372264, "Scarlet Enclave"),
+    2902: (6635982, "The Scarab Dais"),
+    2959: (6982267, "City of Dalaran"),
+    2999: (7255103, "Ruins of Lordaeron"),
+}
+WDT.update({w: v[0] for w, v in DUNGEONS.items()})
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Features", "MapTerrainData.lua")
 
 HEADER = """-- P13Tweaks data: file IDs of the game's minimap terrain tiles, for MapTerrain.lua.
@@ -27,9 +53,13 @@ HEADER = """-- P13Tweaks data: file IDs of the game's minimap terrain tiles, for
 -- minimap picture file ID listed for each tile (MAID chunk, field 7), read from the WoW Forever build %s.
 -- So every tile here exists in this client, and no tile it has is missing. Key = column * 64 + row.
 -- Keyed by world (instance) ID: [0] = Eastern Kingdoms (folder Azeroth), [1] = Kalimdor,
--- [2991] = Zephras Isle (Forever's own island map, folder 2991).
+-- [2991] = Zephras Isle (Forever's own island map, folder 2991), and the open-air dungeons and raids listed
+-- in ns.TerrainDungeons (their tiles are drawn on the game's dungeon maps).
 -- (Regenerate with tools/gen_terrain_data.py after a client update.)
 local ADDON_NAME, ns = ...
+
+ns.TerrainDungeons = {
+%s}
 
 ns.TerrainTiles = {
 """
@@ -159,10 +189,16 @@ def main():
     root = read_ekey(idx, encoding_lookup(enc, [root_ck])[root_ck].hex())
     cks = root_ckeys(root, set(WDT.values()))
     eks = encoding_lookup(enc, list(cks.values()))
-    out = [HEADER % version]
+    dungeons = "".join("[%d] = true,   -- %s\n" % (w, n) for w, (_, n) in DUNGEONS.items())
+    out = [HEADER % (version, dungeons)]
     for world, fid in WDT.items():
         tiles = wdt_tiles(read_ekey(idx, eks[cks[fid]].hex()))
         print("world %d: %d tiles" % (world, len(tiles)))
+        if world in DUNGEONS:   # every listed tile's picture must be in this client
+            pcks = root_ckeys(root, set(tiles.values()))
+            peks = encoding_lookup(enc, list(pcks.values()))
+            missing = [f for f in tiles.values() if f not in pcks or pcks[f] not in peks or peks[pcks[f]][:9] not in idx]
+            assert not missing, "world %d: %d tile pictures not in the client" % (world, len(missing))
         out.append("[%d] = {\n" % world)
         items = sorted(tiles.items())
         for i in range(0, len(items), 8):

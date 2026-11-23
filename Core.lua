@@ -110,36 +110,44 @@ end)
 -- with ns:AddMapButton(button, order); shown ones are laid out left to right by `order`.
 ns.mapButtons = {}
 
--- How far up the row must sit to clear a bar another addon lays along the bottom of the map (e.g. a
--- "Player: x, y   Cursor: x, y" coordinates strip, which covered our buttons). Looks for any shown, wide,
--- low frame on the map window or its map area that touches the bottom-left corner and isn't ours.
+-- How far up the row must sit to clear things another addon lays along the bottom of the map (e.g. a
+-- "Player: x, y   Cursor: x, y" coordinates strip, which covered our buttons). Looks for any shown, low
+-- frame on the map window or its map area that overlaps the bottom-left stretch where our row goes and
+-- isn't ours - also the game's own coordinate texts (Leatrix Maps moves them into the map's bottom edge
+-- as narrow frames of their own, which the old "wide bar only" test skipped).
 local function BottomBarClearance(sc)
     local scL, scB, scR = sc:GetLeft(), sc:GetBottom(), sc:GetRight()
     if not (scL and scB and scR) then return 0 end
-    local ours = {}
-    for _, b in ipairs(ns.mapButtons) do ours[b] = true end
+    local ours, rowW = {}, 0
+    for _, b in ipairs(ns.mapButtons) do
+        ours[b] = true
+        if b:IsShown() then rowW = rowW + (b:GetWidth() or 0) + 4 end
+    end
+    if rowW == 0 then return 0 end
     local lift = 0
-    local function Check(...)
-        for i = 1, select("#", ...) do
-            local c = select(i, ...)
-            if c and c ~= sc and not ours[c] and c ~= WorldMapFrame.BorderFrame and c.IsShown and c:IsShown()
-                and c:IsVisible() then
-                local l, r, b, t = c:GetLeft(), c:GetRight(), c:GetBottom(), c:GetTop()
-                -- (scale differences: compare in screen pixels)
+    local function One(c)
+        if c and c ~= sc and not ours[c] and c ~= WorldMapFrame.BorderFrame and c.IsShown and c:IsShown()
+            and c:IsVisible() then
+            local l, r, b, t = c:GetLeft(), c:GetRight(), c:GetBottom(), c:GetTop()
+            if l and r and b and t then
+                -- (scale differences: compare in the map area's units)
                 local k = c:GetEffectiveScale() / sc:GetEffectiveScale()
-                if l and r and b and t then
-                    l, r, b, t = l * k, r * k, b * k, t * k
-                    local wide = (r - l) > 150 and (t - b) < 60
-                    if wide and l < scL + 150 and r > scL + 150 and b < scB + 10 and t > scB then
-                        lift = math.max(lift, t - scB)
-                    end
+                l, r, b, t = l * k, r * k, b * k, t * k
+                if (t - b) < 60 and l < scL + 6 + rowW and r > scL and b < scB + 10 and t > scB then
+                    lift = math.max(lift, t - scB)
                 end
             end
         end
     end
+    local function Check(...)
+        for i = 1, select("#", ...) do pcall(One, (select(i, ...))) end
+    end
     Check(WorldMapFrame:GetChildren())
     Check(sc:GetChildren())
     if WorldMapFrame.BorderFrame then Check(WorldMapFrame.BorderFrame:GetChildren()) end
+    for _, o in ipairs(WorldMapFrame.overlayFrames or {}) do
+        if o.PlayerCoords then Check(o.PlayerCoords, o.CursorCoords, o.CrosshairCoords) end
+    end
     ns.mapButtonLift = lift   -- (for debugging)
     return lift
 end
