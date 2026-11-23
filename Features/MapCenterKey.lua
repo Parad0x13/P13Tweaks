@@ -44,15 +44,24 @@ end
 
 -- With the tile-map zoom on: fly to the player on the map being shown (zooming out first if it's far),
 -- whatever map level they're on. Returns false if that isn't possible and the old way should be used.
-local function FlyToPlayer(zoomIn)
+-- Where `unit` is: its best map and its x, y on it, or nil (not on a map, another instance, secret values).
+local function UnitMapPos(unit)
+    local m = C_Map.GetBestMapForUnit(unit)
+    if not m or (issecretvalue and issecretvalue(m)) then return end
+    local pos = C_Map.GetPlayerMapPosition(m, unit)
+    if not pos then return end
+    local px, py = pos:GetXY()
+    if px == nil or (issecretvalue and (issecretvalue(px) or issecretvalue(py))) then return end
+    if px == 0 and py == 0 then return end
+    return m, px, py
+end
+ns.UnitMapPos = UnitMapPos
+
+local function FlyToPlayer(zoomIn, unit)
     if not (ns.FlyTo and ns.MapPoint and ns.sheetZoomActive and ns.sheetZoomActive()) then return false end
     local sc = WorldMapFrame.ScrollContainer
-    local playerMap = C_Map.GetBestMapForUnit("player")
+    local playerMap, px, py = UnitMapPos(unit)
     if not playerMap then return false end
-    local pos = C_Map.GetPlayerMapPosition(playerMap, "player")
-    local px, py
-    if pos then px, py = pos:GetXY() end
-    if not px or (px == 0 and py == 0) then return false end
     local cur = WorldMapFrame:GetMapID()
     local u, v = ns.MapPoint(playerMap, cur, px, py)
     if not u then return false end   -- an unrelated map: the old way switches to the player's map
@@ -65,24 +74,30 @@ ns.CloseViewScale = function(mapID)
 end
 
 -- zoomIn: also zoom in close around you (middle-click); otherwise keep the zoom.
-local function CentreOnPlayer(zoomIn)
+-- unit: who to centre on (default "player"; the party-cycle button passes "party1" etc.).
+-- Returns true if it found them on a map.
+local function CentreOnPlayer(zoomIn, unit)
+    unit = unit or "player"
     if not WorldMapFrame:IsShown() then return end
     local sc = WorldMapFrame.ScrollContainer
+    if not UnitMapPos(unit) then return false end   -- not on any map we can show (e.g. in another instance)
     if ns.CancelSheetZoom then ns.CancelSheetZoom() end   -- the tile-map zoom must not pull the view back
-    if FlyToPlayer(zoomIn) then return end
+    if FlyToPlayer(zoomIn, unit) then return true end
 
-    -- Looking at a different map (another zone, the continent, the world)? Go to your zone first.
-    local playerMap = C_Map.GetBestMapForUnit("player")
+    -- Looking at a different map (another zone, the continent, the world)? Go to their zone first.
+    local playerMap = UnitMapPos(unit)
     if playerMap and playerMap ~= WorldMapFrame:GetMapID() then
         ns.suppressMapRing = true    -- switching maps would normally replay the ring
         WorldMapFrame:SetMapID(playerMap)
         ns.suppressMapRing = false
     end
 
-    local pos = C_Map.GetPlayerMapPosition(WorldMapFrame:GetMapID(), "player")
+    local pos = C_Map.GetPlayerMapPosition(WorldMapFrame:GetMapID(), unit)
     local px, py
     if pos then px, py = pos:GetXY() end
-    if not px or (px == 0 and py == 0) then return end
+    if not px or (issecretvalue and (issecretvalue(px) or issecretvalue(py))) or (px == 0 and py == 0) then
+        return false
+    end
 
     local scale = zoomIn and ScaleForYards(sc, WorldMapFrame:GetMapID(), CLOSE_VIEW_YARDS)
     if scale then
@@ -97,6 +112,7 @@ local function CentreOnPlayer(zoomIn)
     else
         sc:InstantPanAndZoom(sc:GetCanvasScale(), px, py, true)
     end
+    return true
 end
 
 ns.CentreMapOnPlayer = CentreOnPlayer

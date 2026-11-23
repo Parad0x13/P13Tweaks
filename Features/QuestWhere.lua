@@ -367,6 +367,13 @@ local function NextStep(lib, id, seen)
     return { id = id, kind = "start" }
 end
 
+-- For other features (MapDungeonQuests.lua): the next step towards quest id, as NextStep above.
+function ns.QuestNextStep(id)
+    local lib = Lib()
+    if not lib then return nil end
+    return NextStep(lib, id, {})
+end
+
 ---------------------------------------------------------------------------
 -- Who gives a quest, and where they are
 ---------------------------------------------------------------------------

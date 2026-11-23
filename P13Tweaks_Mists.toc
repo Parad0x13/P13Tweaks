@@ -2,7 +2,7 @@
 ## Title: P13Tweaks
 ## Notes: Personal quality-of-life tweaks. Type /p13 to open options.
 ## Author: bryan
-## Version: 0.30.39
+## Version: 0.30.41
 ## SavedVariables: P13TweaksDB
 ## OptionalDeps: QuestieDB, TradeSkillMaster
 
@@ -19,6 +19,8 @@ Features\MapMemory.lua
 Features\MapMiddleClick.lua
 Features\BagMiddleSort.lua
 Features\MapCenterKey.lua
+Features\MapPartyCycle.lua
+Features\MapDungeonQuests.lua
 Features\InteractIcons.lua
 Features\RangeBeep.lua
 Features\AggroRange.lua

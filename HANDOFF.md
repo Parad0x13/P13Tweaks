@@ -1,4 +1,19 @@
-# P13Tweaks – Handoff (2026-11-22, v0.30.38)
+# P13Tweaks – Handoff (2026-11-23, v0.30.41)
+
+## v0.30.40 - v0.30.41 (2026-11-23) - Party button on the map, dungeon quest pins
+Not run by a Lua interpreter (none on this machine) or tested in game yet. New files: full game restart needed.
+
+**Party button (`Features/MapPartyCycle.lua`, option `mapPartyCycle`, Map > Finding yourself, default on)**
+- Shown on the map button row (order 20) only while in a group. Left-click centres on the next member (party1..4, or the raid minus you), then back to you; right-click goes backwards. Label = who is centred; resets to "Party" when the map closes or the roster changes. Members with no readable map position are skipped. Keeps the current zoom.
+- `MapCenterKey.lua`: `CentreOnPlayer(zoomIn, unit)` takes a unit now (default "player") and returns true/false; new `UnitMapPos(unit)` (exported `ns.UnitMapPos`) does the secret-value-safe position read. Middle-click behaviour unchanged except it now bails before switching maps if your position can't be read.
+
+**Dungeon quest pins (`Features/MapDungeonQuests.lua`, option `dungeonQuests` toggleButton + saved `dungeonQuestsWhich`, Map > Dungeon quests, `/p13 dungeon`)**
+- "Dungeon" map button (order 37; right-click clears) or the options "Pick..." button opens our own picker frame (19 dungeons + 6 raids + None; not in UISpecialFrames on purpose - taint).
+- Which quests: one chunked pass (300/frame) over `LibQuestieDB.Quest.GetAllIds()` per dungeon, cached per session: `zoneOrSort` in the dungeon's area ids (hard-coded list incl. sub-areas 100xx), or objectives whose kill NPCs / objects / kill-credit NPCs spawn there, or items that mostly (>= half of their droppers) drop there.
+- Per quest: skip done / in log / race / class / exclusiveTo / requiredMaxLevel; else `ns.QuestNextStep(id)` (new export in `QuestWhere.lua`, wraps `NextStep`) -> pin the giver of the first takeable quest of its chain (`ns.QuestGiverPoints`). Greyed = `ns.WhyCantTake` has reasons. Rendering copied from `MapQuestHints.lua` (grouped by giver, RaiseLayer, click = waypoint + supertrack).
+- Unknowns: QuestieDB may contain removed quests (stray pins); dungeon-internal givers depend on the area map.
+
+**Open: taint error "GetAuraDataByIndex(): Auras cannot be accessed when secret while tainted by 'P13Tweaks'"** (2026-11-23 02:22, at a level-up). Both stacks end in the Blizzard objective tracker (EditMode `UpdateLayoutInfo` -> tracker -> `Blizzard_MawBuffs` `ShouldShowMawBuffs`). So the tracker's state was tainted earlier by our code. Suspects: `C_SuperTrack.SetSuperTrackedUserWaypoint` (MapRoute/ProfCap/QuestWhere/MapQuestHints/MapDungeonQuests waypoints), `C_QuestLog.AddQuestWatch` + `SetSuperTrackedQuestID` (QuestShare `SelectInGame`). Asked the user to run `/console taintLog 2` and report the next occurrence; read `_forever_\Logs\taint.log` then. Nothing changed for it yet.
 
 ## v0.30.38 (2026-11-22) - map reopens where it was closed (MapMemory)
 User report: the zoomed-in map didn't reopen at the same place. Not tested in game yet.
