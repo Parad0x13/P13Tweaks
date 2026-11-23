@@ -130,6 +130,11 @@ local function BuildTrainers()
         local lg = type(gsub) == "string" and gsub:lower() or ""
         local keys = {}
         if lg:find("general goods", 1, true) or lg:find("general supplies", 1, true) then keys[#keys + 1] = GOODS_KEY end
+        -- Ammo sellers by title, for the hunter low-ammo notice (AmmoWarn.lua).
+        if lg:find("bowyer", 1, true) or lg:find("gunsmith", 1, true) or lg:find("ammunition", 1, true)
+            or lg:find("arrow", 1, true) or lg:find("bullet", 1, true) or lg:find("bow merchant", 1, true) then
+            keys[#keys + 1] = "AMMO"
+        end
         if HasFlag(NF.BANKER) or lg:find("banker", 1, true) then keys[#keys + 1] = "BANK" end
         if HasFlag(NF.AUCTIONEER) or lg:find("auctioneer", 1, true) then keys[#keys + 1] = "AUCTION" end
         if HasFlag(NF.REPAIR) then keys[#keys + 1] = "REPAIR" end
@@ -313,6 +318,14 @@ local function GuideTo(p)
     end
     ns:Print((placed and "Waypoint set: " or "Nearest trainer: ") .. where)
     if note then ns:Print("|cffffd200" .. note .. "|r") end
+end
+-- For other features: waypoint to the nearest NPC of a kind, e.g. ns.GuideToNpc("AMMO", "Ammo vendor").
+-- Returns false if none is known (so the caller can try another kind).
+function ns.GuideToNpc(key, label)
+    local list = BuildTrainers()
+    if list and not (list[key] and #list[key] > 0) then return false end
+    GuideTo({ name = label or key, skillLine = key })
+    return true
 end
 
 ---------------------------------------------------------------------------
