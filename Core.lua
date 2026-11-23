@@ -110,17 +110,67 @@ end)
 -- with ns:AddMapButton(button, order); shown ones are laid out left to right by `order`.
 ns.mapButtons = {}
 
+-- How far up the row must sit to clear a bar another addon lays along the bottom of the map (e.g. a
+-- "Player: x, y   Cursor: x, y" coordinates strip, which covered our buttons). Looks for any shown, wide,
+-- low frame on the map window or its map area that touches the bottom-left corner and isn't ours.
+local function BottomBarClearance(sc)
+    local scL, scB, scR = sc:GetLeft(), sc:GetBottom(), sc:GetRight()
+    if not (scL and scB and scR) then return 0 end
+    local ours = {}
+    for _, b in ipairs(ns.mapButtons) do ours[b] = true end
+    local lift = 0
+    local function Check(...)
+        for i = 1, select("#", ...) do
+            local c = select(i, ...)
+            if c and c ~= sc and not ours[c] and c ~= WorldMapFrame.BorderFrame and c.IsShown and c:IsShown()
+                and c:IsVisible() then
+                local l, r, b, t = c:GetLeft(), c:GetRight(), c:GetBottom(), c:GetTop()
+                -- (scale differences: compare in screen pixels)
+                local k = c:GetEffectiveScale() / sc:GetEffectiveScale()
+                if l and r and b and t then
+                    l, r, b, t = l * k, r * k, b * k, t * k
+                    local wide = (r - l) > 150 and (t - b) < 60
+                    if wide and l < scL + 150 and r > scL + 150 and b < scB + 10 and t > scB then
+                        lift = math.max(lift, t - scB)
+                    end
+                end
+            end
+        end
+    end
+    Check(WorldMapFrame:GetChildren())
+    Check(sc:GetChildren())
+    if WorldMapFrame.BorderFrame then Check(WorldMapFrame.BorderFrame:GetChildren()) end
+    ns.mapButtonLift = lift   -- (for debugging)
+    return lift
+end
+
 function ns.LayoutMapButtons()
     local sc = WorldMapFrame and WorldMapFrame.ScrollContainer
     if not sc then return end
-    local x = 6
+    local x, y = 6, 6 + BottomBarClearance(sc)
     for _, b in ipairs(ns.mapButtons) do
         b:ClearAllPoints()
         if b:IsShown() then
-            b:SetPoint("BOTTOMLEFT", sc, "BOTTOMLEFT", x, 6)
+            b:SetPoint("BOTTOMLEFT", sc, "BOTTOMLEFT", x, y)
             x = x + b:GetWidth() + 4
         end
     end
+end
+-- the other addon's bar may only appear (or move) once the map is open: lay the row again then
+do
+    local hooked
+    local function Hook()
+        if hooked or not WorldMapFrame then return end
+        hooked = true
+        WorldMapFrame:HookScript("OnShow", function()
+            C_Timer.After(0, ns.LayoutMapButtons)
+            C_Timer.After(0.5, ns.LayoutMapButtons)
+        end)
+        WorldMapFrame:HookScript("OnSizeChanged", function() C_Timer.After(0, ns.LayoutMapButtons) end)
+    end
+    local ev = CreateFrame("Frame")
+    ev:RegisterEvent("PLAYER_LOGIN")
+    ev:SetScript("OnEvent", Hook)
 end
 
 -- Icon layers on the world map (flight points, town icons, quest hints, route) place themselves from their

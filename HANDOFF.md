@@ -1,4 +1,17 @@
-# P13Tweaks – Handoff (2026-11-22, v0.30.26)
+# P13Tweaks – Handoff (2026-11-22, v0.30.33)
+
+## v0.30.27 - v0.30.33 (2026-11-22) - maximized map fills the screen, cave view opt-in, button row clears Leatrix bar
+Tested by the user in game via screenshots (`offcenter.png`, `offcenter2.png`, `badbuttons.png` on the desktop) and the `mapSizeLog` dump.
+
+**Maximized map fills the whole screen (`MapFrameDrag.lua`, option `mapFullWidth`, label now "Maximized map fills the whole screen") - USER-CONFIRMED.**
+- Root cause found from measurements: after sizing the window to the screen, the game's `TitleCanvasSpacerFrame` (67 units tall at the top of the window) is see-through in its upper part while maximized (title/NineSlice/TopTileStreaks hidden), so the game world showed above the black button bar. Window top 960, close button top 914.
+- Fix: while maximized the window is UNCLAMPED (`SetClampedToScreen(false)` - clamping pushed it back), sized screen W x (screen H + gap) and anchored `TOPLEFT` to UIParent `TOPLEFT` at `+gap`, gap = window top - CloseButton top - 2 (capped at the spacer height). Clamp restored when leaving maximized.
+- Re-applied on: OnShow (+1 frame), `SynchronizeDisplayState`, `UpdateUIPanelPositions`, `UpdateMaximizedSize`, the window's OnSizeChanged, DISPLAY_SIZE_CHANGED / UI_SCALE_CHANGED. `applying` guard stops recursion. Calls `f:OnFrameSizeChanged()` after a size change so the map re-fits.
+- Diagnostic: `/p13 mapsize` and an AUTOMATIC record 1 s after the maximized map shows -> `P13TweaksDB.mapSizeLog` (frame, scroll, child, every keyed child of the window/BorderFrame, `buttonLift`). TEMPORARY - remove the auto-record (`AutoRecord` in the PLAYER_LOGIN block) once nothing else needs it.
+
+**Cave view is opt-in (`MapTerrain.lua`)**: no longer switches on by itself indoors. `cave.userOn` (was `userOff`): the Cave view button toggles it; the choice holds while indoors (also across closing/reopening the map) and resets on going outside. Unconfirmed in game.
+
+**Map button row clears other addons' bottom bars (`Core.lua` `LayoutMapButtons`)**: `BottomBarClearance` looks for a shown, wide (>150), short (<60) frame touching the bottom-left of the ScrollContainer among the children of WorldMapFrame / ScrollContainer / BorderFrame, not ours, and lifts the row above it (`ns.mapButtonLift`). Re-laid on map OnShow (+0 and +0.5 s) and OnSizeChanged. The bar was **Leatrix Maps' "Show coordinates"** footer (game's own coords moved into a strip; `Leatrix_Maps.lua` ~6988). The user is turning that option off (`/ltm`); unconfirmed whether the lift worked while it was on.
 
 ## v0.30.8 - v0.30.26 (2026-11-22) - map zoom/centring rework, perf pass, debug switch fixed
 Nothing here was run by a Lua interpreter (none on this PC); the user tested in game and reported. Debug traces are read from `.../_forever_/WTF/Account/69863589#1/SavedVariables/P13Tweaks.lua` (`mapDebugTrace`) after the user `/reload`s.

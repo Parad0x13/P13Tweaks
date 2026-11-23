@@ -419,14 +419,15 @@ ns:RegisterOption({
 -- Cave view: in caves the world map only has the outdoor zone, but the minimap draws the
 -- cave. While the map is open and you're indoors, borrow the real minimap: enlarge it over
 -- the map picture (square, zoomed out), and put it back when the map closes or you go
--- outside. Mouse wheel over it zooms the minimap. The Cave view button switches back to the
--- normal map until you next go indoors. (Buildings count as indoors too.)
+-- outside. Mouse wheel over it zooms the minimap. It does NOT switch on by itself: indoors the
+-- map opens as normal and the Cave view button toggles it; your choice holds until you go
+-- outside again. (Buildings count as indoors too.)
 ---------------------------------------------------------------------------
 
 -- (No panning: the minimap only draws a circle centred on you, and the game doesn't clip it
 -- at a frame's edges - a bigger, slid minimap spills over the rest of the screen. Tried and
 -- removed.)
-local cave = { active = false, userOff = false }
+local cave = { active = false, userOn = false }
 local caveBack, caveCatch, caveButton, caveArrow
 
 -- Fit the borrowed minimap to the map window, centred.
@@ -537,8 +538,8 @@ end
 
 local function CaveCheck()
     local possible = WorldMapFrame:IsShown() and CavePossible()
-    if not (IsIndoors and IsIndoors()) then cave.userOff = false end   -- outside again: reset
-    local want = possible and not cave.userOff
+    if not (IsIndoors and IsIndoors()) then cave.userOn = false end   -- outside again: back to the normal map
+    local want = possible and cave.userOn
     if want and not cave.active then CaveStart() elseif not want and cave.active then CaveStop() end
     if caveButton then
         local show = possible and true or false
@@ -551,7 +552,7 @@ ns:RegisterOption({
     key = "mapCaveView",
     type = "toggle",
     label = "Cave view: show the minimap's cave picture on the world map",
-    tooltip = "In caves (and buildings) the world map only shows the outdoor zone, but the minimap draws the inside. With this on, opening the map indoors shows the minimap there instead - big and zoomed out; mouse wheel zooms it. It shows what the minimap draws around you (no panning: the minimap is always centred on you). The Cave view / Normal map button at the bottom-left switches between the two. Your minimap goes back to its corner when you close the map.",
+    tooltip = "In caves (and buildings) the world map only shows the outdoor zone, but the minimap draws the inside. With this on, a Cave view button appears at the bottom-left of the map while you're indoors; click it to show the minimap there instead - big and zoomed out; mouse wheel zooms it. It shows what the minimap draws around you (no panning: the minimap is always centred on you). The map still opens as the normal map; the button (Cave view / Normal map) toggles, and your choice holds until you go outside. Your minimap goes back to its corner when you close the map.",
     default = true,
     onChange = function(v) if not v then CaveStop() end end,
 })
@@ -679,7 +680,7 @@ loader:SetScript("OnEvent", function()
     caveButton:SetSize(100, 22)
     caveButton:SetFrameLevel(sc:GetFrameLevel() + 100)
     caveButton:SetScript("OnClick", function()
-        cave.userOff = cave.active   -- on -> off for this visit indoors, off -> on
+        cave.userOn = not cave.active   -- toggle; holds for this visit indoors
         CaveCheck()
     end)
     caveButton:SetScript("OnEnter", function(self)
