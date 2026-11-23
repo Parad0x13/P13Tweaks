@@ -9,7 +9,8 @@
 local ADDON_NAME, ns = ...
 
 local ICON = "Interface\\GossipFrame\\AvailableQuestIcon"
-local SIZE = 22
+local DISC = "Interface\\CHARACTERFRAME\\TempPortraitAlphaMask"   -- a round white disc, tinted for the pin's backing
+local SIZE = 30
 
 -- area ids (QuestieDB / AreaTable) of each dungeon and its sub-areas, with the usual level range
 local DUNGEONS = {
@@ -66,76 +67,88 @@ local Redraw
 -- Which quests belong to a dungeon (one pass over QuestieDB, a few hundred quests per frame)
 ---------------------------------------------------------------------------
 
-local questsOf = {}      -- dungeon key -> { questIDs }
-local scanning           -- { key, i } while a scan runs
+local questsOf = {}      -- dungeon key -> { questIDs }; filled for every dungeon by one scan
+local scanning           -- true while the scan runs
+local scanDone = {}      -- functions to call once the scan has finished
 local PER_FRAME = 300
 
-local function StartScan(d)
-    if questsOf[d.key] or (scanning and scanning.key == d.key) then return end
+local keyOfArea = {}     -- area id -> dungeon key
+for _, d in ipairs(DUNGEONS) do for _, a in ipairs(d.areas) do keyOfArea[a] = d.key end end
+
+-- One pass over QuestieDB sorts every quest into the dungeons it belongs to (all dungeons at once, so the
+-- picker can show how many quests each one has).
+local function StartScan(onDone)
+    if onDone then
+        if questsOf.ready then onDone(); return end
+        scanDone[#scanDone + 1] = onDone
+    end
+    if questsOf.ready or scanning then return end
     local lib = Lib()
     if not lib then return end
     local ok, ids = pcall(lib.Quest.GetAllIds)
     if not ok or type(ids) ~= "table" then return end
-    local inArea = {}
-    for _, a in ipairs(d.areas) do inArea[a] = true end
-    local npcIn, objIn = {}, {}   -- cache: does this creature / object spawn inside?
-    local function SpawnsInside(db, cache, id)
+    local npcIn, objIn = {}, {}   -- cache: which dungeons does this creature / object spawn in? (key -> true, or false)
+    local function SpawnsIn(db, cache, id)
         if type(id) ~= "number" then return false end
         local c = cache[id]
         if c ~= nil then return c end
         c = false
         local spawns = Get(db, id, "spawns")
         if type(spawns) == "table" then
-            for area in pairs(spawns) do if inArea[area] then c = true; break end end
+            for area in pairs(spawns) do
+                local k = keyOfArea[area]
+                if k then c = c or {}; c[k] = true end
+            end
         end
         cache[id] = c
         return c
     end
-    local function Belongs(qid)
+    local function Add(set, keys) if keys then for k in pairs(keys) do set[k] = true end end end
+    local function Belongs(qid)   -- set of dungeon keys
+        local set = {}
         local zone = Get(lib.Quest, qid, "zoneOrSort")
-        if type(zone) == "number" and inArea[zone] then return true end
+        if type(zone) == "number" and keyOfArea[zone] then set[keyOfArea[zone]] = true end
         local o = Get(lib.Quest, qid, "objectives")
-        if type(o) ~= "table" then return false end
-        for _, e in ipairs(type(o[1]) == "table" and o[1] or {}) do
-            if SpawnsInside(lib.Npc, npcIn, e[1]) then return true end
-        end
+        if type(o) ~= "table" then return set end
+        for _, e in ipairs(type(o[1]) == "table" and o[1] or {}) do Add(set, SpawnsIn(lib.Npc, npcIn, e[1])) end
         if lib.Object then
-            for _, e in ipairs(type(o[2]) == "table" and o[2] or {}) do
-                if SpawnsInside(lib.Object, objIn, e[1]) then return true end
-            end
+            for _, e in ipairs(type(o[2]) == "table" and o[2] or {}) do Add(set, SpawnsIn(lib.Object, objIn, e[1])) end
         end
         for _, e in ipairs(type(o[3]) == "table" and o[3] or {}) do
             local drops = lib.Item and type(e[1]) == "number" and Get(lib.Item, e[1], "npcDrops")
             if type(drops) == "table" then
-                local inside, total = 0, 0
+                local inside, total = {}, 0
                 for _, n in ipairs(drops) do
                     total = total + 1
-                    if SpawnsInside(lib.Npc, npcIn, n) then inside = inside + 1 end
+                    local keys = SpawnsIn(lib.Npc, npcIn, n)
+                    if keys then for k in pairs(keys) do inside[k] = (inside[k] or 0) + 1 end end
                 end
                 -- the item mostly drops in there (not some common item that one dungeon mob also drops)
-                if total > 0 and inside * 2 >= total then return true end
+                for k, n in pairs(inside) do if n * 2 >= total then set[k] = true end end
             end
         end
-        for _, e in ipairs(type(o[5]) == "table" and o[5] or {}) do
-            if SpawnsInside(lib.Npc, npcIn, e[2]) then return true end
-        end
-        return false
+        for _, e in ipairs(type(o[5]) == "table" and o[5] or {}) do Add(set, SpawnsIn(lib.Npc, npcIn, e[2])) end
+        return set
     end
     local found = {}
-    scanning = { key = d.key }
+    for _, d in ipairs(DUNGEONS) do found[d.key] = {} end
+    scanning = true
     local i = 1
     local function Step()
-        if not (scanning and scanning.key == d.key) then return end   -- another dungeon was picked meanwhile
         local last = math.min(#ids, i + PER_FRAME - 1)
         for k = i, last do
             local qid = ids[k]
-            if Belongs(qid) then found[#found + 1] = qid end
+            for key in pairs(Belongs(qid)) do local f = found[key]; f[#f + 1] = qid end
         end
         i = last + 1
         if i <= #ids then C_Timer.After(0, Step); return end
-        questsOf[d.key] = found
+        for key, list in pairs(found) do questsOf[key] = list end
+        questsOf.ready = true
         scanning = nil
         lastSig = nil
+        local waiting = scanDone
+        scanDone = {}
+        for _, f in ipairs(waiting) do pcall(f) end
         if Redraw then Redraw(true) end
     end
     Step()
@@ -168,19 +181,21 @@ local function PermanentlyBlocked(lib, qid)
     return false
 end
 
-local entries, entriesAt, counts = {}, -100, {}
+local cacheOf = {}   -- dungeon key -> { entries, counts, at }; wipe() it to work everything out again
 
--- { qid, title, stepId, stepTitle, reasons } per quest to pin; counts = { done, log, total }
-local function Entries()
-    local d = Chosen()
-    if not d then return {} end
-    if GetTime() - entriesAt < 3 and entries.key == d.key then return entries end
+-- { qid, title, stepId, stepTitle, reasons } per quest to pin, and
+-- counts = { done, log, notYou, total (still to pick up), now (of those, takeable now) }. nil, nil until the scan is done.
+local function Entries(d)
+    d = d or Chosen()
+    if not d then return {}, nil end
+    local c = cacheOf[d.key]
+    if c and GetTime() - c.at < 3 then return c.entries, c.counts end
     local lib = Lib()
     local list = questsOf[d.key]
-    if not (lib and list) then StartScan(d); return {} end
-    entries = { key = d.key }
-    counts = { done = 0, log = 0, total = 0, notYou = 0 }
-    entriesAt = GetTime()
+    if not (lib and list) then StartScan(); return {}, nil end
+    local entries = {}
+    local counts = { done = 0, log = 0, total = 0, now = 0, notYou = 0 }
+    cacheOf[d.key] = { entries = entries, counts = counts, at = GetTime() }
     local seenStep = {}
     for _, qid in ipairs(list) do
         if ns.QuestCompleted and ns.QuestCompleted(qid) then
@@ -193,12 +208,14 @@ local function Entries()
             local step = ns.QuestNextStep and ns.QuestNextStep(qid) or { id = qid, kind = "start" }
             if step and step.kind == "start" and not PermanentlyBlocked(lib, step.id) then
                 counts.total = counts.total + 1
+                local reasons = (ns.WhyCantTake and ns.WhyCantTake(step.id)) or {}
+                if #reasons == 0 then counts.now = counts.now + 1 end
                 local e = {
                     qid = qid,
                     title = ns.QuestName and ns.QuestName(qid) or ("Quest " .. qid),
                     stepId = step.id,
                     stepTitle = step.id ~= qid and (ns.QuestName and ns.QuestName(step.id) or ("Quest " .. step.id)) or nil,
-                    reasons = (ns.WhyCantTake and ns.WhyCantTake(step.id)) or {},
+                    reasons = reasons,
                 }
                 -- several dungeon quests reached through the same lead-up quest: one entry for it, listing them all
                 local same = seenStep[step.id]
@@ -214,7 +231,7 @@ local function Entries()
             end
         end
     end
-    return entries
+    return entries, counts
 end
 
 ---------------------------------------------------------------------------
@@ -309,15 +326,39 @@ local function SetWaypoint(self)
     ns:Print((placed and "Waypoint set: " or "Quest giver: ") .. ("%s - %s %.1f, %.1f"):format(p.name or "quest giver", ZoneName(p.uiMap), p.x, p.y))
 end
 
+-- A pin: the "!" on a dark disc with a gold ring, and a gold glow behind that slowly pulses so it catches the eye.
 local function Icon()
     used = used + 1
     local b = pool[used]
     if not b then
         b = CreateFrame("Button", nil, layer)
         b:SetSize(SIZE, SIZE)
+        b.glow = b:CreateTexture(nil, "BACKGROUND", nil, -2)
+        b.glow:SetPoint("CENTER")
+        b.glow:SetSize(SIZE * 1.9, SIZE * 1.9)
+        b.glow:SetTexture(DISC)
+        b.glow:SetBlendMode("ADD")
+        b.glow:SetVertexColor(1, 0.75, 0.1, 0.55)
+        b.ring = b:CreateTexture(nil, "BACKGROUND", nil, -1)
+        b.ring:SetPoint("CENTER")
+        b.ring:SetSize(SIZE, SIZE)
+        b.ring:SetTexture(DISC)
+        b.disc = b:CreateTexture(nil, "BACKGROUND", nil, 0)
+        b.disc:SetPoint("CENTER")
+        b.disc:SetSize(SIZE - 4, SIZE - 4)
+        b.disc:SetTexture(DISC)
+        b.disc:SetVertexColor(0, 0, 0, 0.85)
         b.tex = b:CreateTexture(nil, "OVERLAY")
-        b.tex:SetAllPoints()
+        b.tex:SetPoint("CENTER")
+        b.tex:SetSize(SIZE - 4, SIZE - 4)
         b.tex:SetTexture(ICON)
+        b.pulse = b.glow:CreateAnimationGroup()
+        b.pulse:SetLooping("BOUNCE")
+        local a = b.pulse:CreateAnimation("Alpha")
+        a:SetFromAlpha(1)
+        a:SetToAlpha(0.2)
+        a:SetDuration(0.8)
+        a:SetSmoothing("IN_OUT")
         b:SetScript("OnEnter", ShowTooltip)
         b:SetScript("OnLeave", function() GameTooltip:Hide() end)
         b:SetScript("OnClick", SetWaypoint)
@@ -366,7 +407,17 @@ Redraw = function(force)
         local anyTake = false
         for _, x in ipairs(g) do if #x.entry.reasons == 0 then anyTake = true end end
         b.tex:SetDesaturated(not anyTake)
-        if anyTake then b.tex:SetVertexColor(1, 1, 1, 1) else b.tex:SetVertexColor(0.6, 0.6, 0.6, 0.7) end
+        if anyTake then
+            b.tex:SetVertexColor(1, 1, 1, 1)
+            b.ring:SetVertexColor(1, 0.82, 0.1, 1)
+            b.glow:Show()
+            if not b.pulse:IsPlaying() then b.pulse:Play() end
+        else
+            b.tex:SetVertexColor(0.6, 0.6, 0.6, 0.8)
+            b.ring:SetVertexColor(0.5, 0.5, 0.5, 0.8)
+            b.pulse:Stop()
+            b.glow:Hide()
+        end
     end
 end
 
@@ -377,20 +428,24 @@ end
 local function UpdateButton()
     if not button then return end
     local d = Chosen()
-    button:SetText(d and d.short or "Dungeon")
+    local text = d and d.short or "Dungeon"
+    if d then
+        local _, counts = Entries(d)
+        if counts then text = ("%s |cffffd100%d|r"):format(d.short, counts.total) end
+    end
+    button:SetText(text)
     button:SetShown(On() and true or false)
 end
 
 -- Say in chat how many pins there are, once the dungeon's quests are known.
-local function Report(d, tries)
-    if Chosen() ~= d then return end
-    if not questsOf[d.key] then
-        if (tries or 0) < 40 then C_Timer.After(0.25, function() Report(d, (tries or 0) + 1) end) end
-        return
-    end
-    entriesAt = -100
-    Entries()
+local function Report(d)
+    if Chosen() ~= d or not questsOf[d.key] then return end
+    cacheOf[d.key] = nil
+    local _, counts = Entries(d)
+    if not counts then return end
+    UpdateButton()
     local extra = {}
+    if counts.total > counts.now then extra[#extra + 1] = (counts.total - counts.now) .. " not yet (greyed)" end
     if counts.done > 0 then extra[#extra + 1] = counts.done .. " done" end
     if counts.log > 0 then extra[#extra + 1] = counts.log .. " in your log" end
     if counts.notYou > 0 then extra[#extra + 1] = counts.notYou .. " not for you" end
@@ -400,13 +455,11 @@ end
 
 local function Choose(key)
     ns:Set("dungeonQuestsWhich", key)
-    entriesAt = -100
     lastSig = nil
     local d = byKey[key or ""]
     if d then
         if not Lib() then ns:Print("Dungeon quest pins need QuestieDB.") return end
-        StartScan(d)
-        Report(d)
+        StartScan(function() Report(d) end)
     end
     UpdateButton()
     if picker then picker:Hide() end
@@ -424,7 +477,7 @@ local function BuildPicker()
             insets = { left = 3, right = 3, top = 3, bottom = 3 } })
         picker:SetBackdropColor(0, 0, 0, 0.92)
     end
-    local ROW, COLW = 18, 200
+    local ROW, COLW = 18, 225
     local title = picker:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("TOPLEFT", 10, -8)
     title:SetText("Dungeon quests - pick a dungeon")
@@ -440,6 +493,24 @@ local function BuildPicker()
         b:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
         b:SetScript("OnClick", function() Choose(key) end)
         b.key = key
+        if key then
+            -- how many of its quests you can still pick up
+            b.count = b:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            b.count:SetPoint("RIGHT", -4, 0)
+            b:SetScript("OnEnter", function(self)
+                if not self.counts then return end
+                local c = self.counts
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:SetText(byKey[key].name)
+                GameTooltip:AddLine(("%d quest%s still to pick up"):format(c.total, c.total == 1 and "" or "s"), 1, 1, 1)
+                if c.now > 0 then GameTooltip:AddLine(c.now .. " you can take now", 0.3, 1, 0.3) end
+                if c.total > c.now then GameTooltip:AddLine((c.total - c.now) .. " you can't take yet (level or an earlier quest)", 0.7, 0.7, 0.7) end
+                if c.log > 0 then GameTooltip:AddLine(c.log .. " in your log", 1, 0.82, 0) end
+                if c.done > 0 then GameTooltip:AddLine(c.done .. " done", 0.6, 0.6, 0.6) end
+                GameTooltip:Show()
+            end)
+            b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        end
         return b
     end
     picker.rows = {}
@@ -452,11 +523,34 @@ local function BuildPicker()
     right = right + 2
     picker.rows[#picker.rows + 1] = Row(2, right, "|cffff8080None (remove the pins)|r", false)
     picker:SetSize(COLW * 2 + 10, 40 + math.max(left, right) * ROW)
+    local function FillCounts(self)
+        for _, r in ipairs(self.rows) do
+            if r.count then
+                local _, c = Entries(byKey[r.key])
+                r.counts = c
+                if not c then
+                    r.count:SetText("...")
+                    r.count:SetTextColor(0.6, 0.6, 0.6)
+                elseif c.total == 0 then
+                    r.count:SetText("0")
+                    r.count:SetTextColor(0.45, 0.45, 0.45)
+                elseif c.now > 0 then
+                    r.count:SetText(c.total)
+                    r.count:SetTextColor(1, 0.82, 0)        -- some you can take now: gold
+                else
+                    r.count:SetText(c.total)
+                    r.count:SetTextColor(0.65, 0.65, 0.65)  -- none takeable yet: grey
+                end
+            end
+        end
+    end
     picker:SetScript("OnShow", function(self)
         local cur = ns:Get("dungeonQuestsWhich")
         for _, r in ipairs(self.rows) do
             if r.key and r.key == cur then r.text:SetTextColor(0.3, 1, 0.3) else r.text:SetTextColor(1, 1, 1) end
         end
+        FillCounts(self)
+        if not questsOf.ready then StartScan(function() if self:IsShown() then FillCounts(self) end end) end
     end)
     -- (not added to UISpecialFrames for Escape: writing into that Blizzard table could spread taint)
     picker:Hide()
@@ -485,7 +579,7 @@ ns:RegisterOption({
     buttonText = "Pick...",
     buttonWidth = 70,
     onClick = function() if not On() then ns:Set("dungeonQuests", true); if ns.RefreshOptions then pcall(ns.RefreshOptions, ns) end end; TogglePicker(nil) end,
-    tooltip = "Pick a dungeon (Pick... here, or the Dungeon button on the world map) and a ! goes on the map at every place you pick up one of its quests - including quests elsewhere that send you into it. If a quest needs earlier quests first, the pin is on the first one you can take. Done quests, ones in your log and ones your race or class can't take are left out; greyed pins you can't take yet (hover for why). Click a pin for a waypoint.\n\nNeeds QuestieDB.",
+    tooltip = "Pick a dungeon (Pick... here, or the Dungeon button on the world map) and a ! goes on the map at every place you pick up one of its quests (the list shows how many each dungeon has left for you) - including quests elsewhere that send you into it. If a quest needs earlier quests first, the pin is on the first one you can take. Done quests, ones in your log and ones your race or class can't take are left out; greyed pins you can't take yet (hover for why). Click a pin for a waypoint.\n\nNeeds QuestieDB.",
     default = true,
     onChange = function(v)
         if not v and picker then picker:Hide() end
@@ -506,7 +600,7 @@ events:RegisterEvent("PLAYER_LEVEL_UP")
 events:SetScript("OnEvent", function(_, event)
     if event ~= "PLAYER_LOGIN" then
         -- done / in-log / level changed: work the pins out again shortly
-        C_Timer.After(0.5, function() entriesAt = -100; lastSig = nil end)
+        C_Timer.After(0.5, function() wipe(cacheOf); lastSig = nil; UpdateButton() end)
         return
     end
     local sc = WorldMapFrame and WorldMapFrame.ScrollContainer
@@ -516,7 +610,7 @@ events:SetScript("OnEvent", function(_, event)
     layer:SetPoint("TOPLEFT", sc.Child, "TOPLEFT")
 
     button = CreateFrame("Button", nil, sc, "UIPanelButtonTemplate")
-    button:SetSize(96, 22)
+    button:SetSize(112, 22)
     button:SetFrameLevel(sc:GetFrameLevel() + 100)
     button:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     button:SetScript("OnClick", function(self, mb)
@@ -537,8 +631,8 @@ events:SetScript("OnEvent", function(_, event)
     local poll = CreateFrame("Frame", nil, WorldMapFrame)
     poll:SetScript("OnUpdate", function() if ns.layersStamp ~= GetTime() then Redraw(false) end end)
     ns.AddMapLayerRefresh(function() Redraw(false) end)
-    poll:SetScript("OnShow", function() entriesAt = -100; Redraw(true) end)
+    poll:SetScript("OnShow", function() wipe(cacheOf); UpdateButton(); Redraw(true) end)
     WorldMapFrame:HookScript("OnHide", function() if picker then picker:Hide() end end)
     -- the chosen dungeon's quests are worked out in the background soon after login, so the map is ready
-    C_Timer.After(5, function() local d = Chosen(); if d then StartScan(d) end end)
+    C_Timer.After(5, function() local d = Chosen(); if d then StartScan(UpdateButton) end end)
 end)

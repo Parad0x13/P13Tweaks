@@ -1,4 +1,12 @@
-# P13Tweaks – Handoff (2026-11-23, v0.30.41)
+# P13Tweaks – Handoff (2026-11-23, v0.30.42)
+
+## v0.30.42 (2026-11-23) - dungeon quest counts in the picker, more visible pins
+User: the dungeon pins didn't show clearly; wanted a count per dungeon in the picker. Not run by a Lua interpreter or tested in game yet (a Python Lua parser install was blocked).
+- Scan: now ONE chunked pass over QuestieDB for all dungeons at once (`keyOfArea` area -> key; spawn caches hold a set of dungeon keys). `questsOf[key]` for every dungeon, `questsOf.ready` when done. `StartScan(onDone)` queues callbacks (Report, picker refill, button update).
+- `Entries(d)` takes any dungeon (default Chosen), cached per key in `cacheOf` for 3 s (`wipe(cacheOf)` invalidates), returns `entries, counts`; counts gains `now` (takeable now, no `WhyCantTake` reasons).
+- Picker rows: count on the right (gold = some takeable now, grey = all locked, dim 0 = none, "..." while scanning); row tooltip with now / not yet / in log / done. COLW 200 -> 225.
+- Map button shows "<short> N" (width 96 -> 112), refreshed on quest events / map open.
+- Pins: SIZE 22 -> 30; dark disc + gold ring (TempPortraitAlphaMask tinted) and an ADD gold glow pulsing (Alpha anim, BOUNCE). Greyed pins: grey ring, no glow.
 
 ## v0.30.40 - v0.30.41 (2026-11-23) - Party button on the map, dungeon quest pins
 Not run by a Lua interpreter (none on this machine) or tested in game yet. New files: full game restart needed.
@@ -9,7 +17,7 @@ Not run by a Lua interpreter (none on this machine) or tested in game yet. New f
 
 **Dungeon quest pins (`Features/MapDungeonQuests.lua`, option `dungeonQuests` toggleButton + saved `dungeonQuestsWhich`, Map > Dungeon quests, `/p13 dungeon`)**
 - "Dungeon" map button (order 37; right-click clears) or the options "Pick..." button opens our own picker frame (19 dungeons + 6 raids + None; not in UISpecialFrames on purpose - taint).
-- Which quests: one chunked pass (300/frame) over `LibQuestieDB.Quest.GetAllIds()` per dungeon, cached per session: `zoneOrSort` in the dungeon's area ids (hard-coded list incl. sub-areas 100xx), or objectives whose kill NPCs / objects / kill-credit NPCs spawn there, or items that mostly (>= half of their droppers) drop there.
+- Which quests: one chunked pass (300/frame) over `LibQuestieDB.Quest.GetAllIds()` (since v0.30.42 for all dungeons at once), cached per session: `zoneOrSort` in the dungeon's area ids (hard-coded list incl. sub-areas 100xx), or objectives whose kill NPCs / objects / kill-credit NPCs spawn there, or items that mostly (>= half of their droppers) drop there.
 - Per quest: skip done / in log / race / class / exclusiveTo / requiredMaxLevel; else `ns.QuestNextStep(id)` (new export in `QuestWhere.lua`, wraps `NextStep`) -> pin the giver of the first takeable quest of its chain (`ns.QuestGiverPoints`). Greyed = `ns.WhyCantTake` has reasons. Rendering copied from `MapQuestHints.lua` (grouped by giver, RaiseLayer, click = waypoint + supertrack).
 - Unknowns: QuestieDB may contain removed quests (stray pins); dungeon-internal givers depend on the area map.
 
