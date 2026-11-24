@@ -1,4 +1,20 @@
-# P13Tweaks – Handoff (2026-11-23, v0.31.0)
+# P13Tweaks – Handoff (2026-11-24, v0.31.8)
+
+## v0.31.1-0.31.8 (2026-11-24) - window fit, Forever talents, gear tooltips
+None of this tested in game yet (no Lua on this PC, no syntax check run). User reloaded into 0.31.8 at the end.
+- `Options.lua` (0.31.1): window height capped to `UIParent:GetHeight() - 40`, re-fitted on every open; plain tabs build into a ScrollFrame (scrollbar hidden when it fits). Full-width edit boxes narrowed by `SCROLL_W`.
+- `ProfCap.lua` (0.31.2): Fishing cap 150 + in Booty Bay -> waypoint on Old Man Heming (sells "Expert Fishing - The Bass and You"); QuestieDB NPC 2626, falls back to a name search. ID from memory, unconfirmed.
+- `CharProgress.lua` (0.31.3): **Forever talents are the modern C_ClassTalents/C_Traits tree** (old GetTalentInfo reads nothing -> everything looked unspent). `ReadTraitTalents`: trees split by posX gaps (Leatrix_Plus `TalentSummary` does the same), tiers = distinct posY per tree, names from `TREE_NAMES`, unspent = `C_Traits.GetTreeCurrencyInfo` quantity. Old API kept as fallback. TRAIT_* events refresh.
+- `ProfCap.lua` + `AmmoWarn.lua` (0.31.4): hunters get "Mark closest Ammo vendor" in the portrait menu (`ns.GuideToAmmo`, falls back to General Goods).
+- `CharProgress.lua` (0.31.5-0.31.8), gear help for a user new to stats:
+  - "Best stats" now shows the plan's plain `build.stats` ranking; the per-point weight ranking (Crit > Hit > Mp5 > Agility) misled.
+  - Item tooltip verdict (option `charProgressTooltip`): "P13: upgrade +12% over your Hands" / about the same (+1%) / worse -8%. Same `Score` as bag upgrades. Too-high-level items still compared ("once you're level N"); other red lines = no line. Hold Shift: per-stat breakdown for both items (MODIFIER_STATE_CHANGED -> `GameTooltip:RefreshData`).
+  - Armor now weighted 0.02/pt when the weights have none (plain white items scored 0).
+  - `TextBonuses`: green "Equip: +N attack power / crit % / hit % / mp5..." lines parsed from `C_TooltipInfo.GetHyperlink`, since GetItemStats often misses them (Pawn reads them).
+  - Stat tags (option `charProgressStatTags`): each "+N Stat" / "Equip:" line gets best (first in plan ranking) / good (rest of ranking, crit, hit, mp5) / a little / useless (< 15% of main stat per point).
+- User compared with **Pawn** (installed): Pawn's hunter scales are classic ones that value Strength/Int; Barbaric Loincloth (+3 Str +2 Int, 25 armor) vs Handstitched Leather Pants (+1 Agi, 48 armor): Pawn +51%, P13 -35%. Explained; not a bug.
+- To check in game: talents show 0 unspent and the real split; stat tags + Shift breakdown appear; Heming marker; ammo menu item; long Map tab scrolls.
+- Open question: BM crit weight 6.7 per 1% (~2.6 Agility) looks low vs classic rules of thumb; left as is.
 
 ## v0.31.0 (2026-11-23) - Character Progression tab
 User doesn't know builds/talents/gear and asked for a dumbed-down, character-aware tab, WoW FOREVER info only (no Classic bleed-through). Not tested in game; only a block/bracket balance check (scratchpad python script) was run. **New files: full game restart.**

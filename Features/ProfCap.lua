@@ -300,8 +300,51 @@ local function FindTrainer(p)
     return choice, note
 end
 
+-- Expert Fishing (cap 150 -> 225) is a book, "Expert Fishing - The Bass and You", sold by
+-- Old Man Heming in Booty Bay - not taught by a fishing trainer. So when you're at the
+-- 150 cap and standing in Booty Bay, point at him instead of the nearest trainer.
+local HEMING_ID, HEMING_NAME = 2626, "Old Man Heming"
+local function FindHeming()
+    local lib = _G.LibQuestieDB
+    if not (lib and lib.Npc and lib.Npc.Get) then return end
+    local Get = lib.Npc.Get
+    local id = HEMING_ID
+    local okN, name = pcall(Get, id, "name")
+    if not (okN and name == HEMING_NAME) and lib.Npc.GetAllIds then   -- ID differs on this client: find him by name
+        id = nil
+        for _, nid in ipairs(lib.Npc.GetAllIds()) do
+            local ok, n = pcall(Get, nid, "name")
+            if ok and n == HEMING_NAME then id = nid; break end
+        end
+        if not id then return end
+    end
+    local _, spawns = pcall(Get, id, "spawns")
+    local _, sub = pcall(Get, id, "subName")
+    if type(spawns) ~= "table" then return end
+    local areaMap = LoadAreaMap()
+    for area, points in pairs(spawns) do
+        local uiMap = areaMap[area]
+        local pt = points[1]
+        if uiMap and uiMap ~= 0 and pt and pt[1] and pt[2] and pt[1] >= 0 then
+            return { t = { id = id, name = HEMING_NAME, sub = type(sub) == "string" and sub or nil },
+                     uiMap = uiMap, x = pt[1], y = pt[2] }
+        end
+    end
+end
+
+local function InBootyBay()
+    local sub = GetSubZoneText and GetSubZoneText() or ""
+    local mini = GetMinimapZoneText and GetMinimapZoneText() or ""
+    return sub == "Booty Bay" or mini == "Booty Bay"
+end
+
 local function GuideTo(p)
-    local c, note = FindTrainer(p)
+    local c, note
+    if p.skillLine == 356 and p.max == 150 and InBootyBay() then
+        c = FindHeming()
+        if c then note = "Expert Fishing is a book here: buy \"Expert Fishing - The Bass and You\" from him and read it." end
+    end
+    if not c then c, note = FindTrainer(p) end
     if not c then ns:Print(note); return end
     local info = C_Map.GetMapInfo(c.uiMap)
     local zone = info and info.name or ("map " .. c.uiMap)
@@ -559,6 +602,13 @@ if Menu and Menu.ModifyMenu then
         root:CreateDivider()
         root:CreateButton("Mark closest Class Trainer", GuideToClassTrainer)
         root:CreateButton("Mark closest Vendor (to sell)", GuideToVendor)
+        if select(2, UnitClass("player")) == "HUNTER" then
+            -- QuestieDB titles: bowyers, gunsmiths, ammunition sellers (same list as the low-ammo notice)
+            -- ns.GuideToAmmo (AmmoWarn.lua) falls back to General Goods if no bowyer/gunsmith is known
+            root:CreateButton("|TInterface\\Icons\\INV_Ammo_Arrow_02:14:14:0:0|t Mark closest Ammo vendor (arrows / bullets)", function()
+                if ns.GuideToAmmo then ns.GuideToAmmo() else ns.GuideToNpc("AMMO", "Ammo vendor") end
+            end)
+        end
         root:CreateButton("|TInterface\\Icons\\INV_Letter_15:14:14:0:0|t Mark closest Mailbox", GuideToMailbox)
         root:CreateButton("|TInterface\\Minimap\\Tracking\\Auctioneer:14:14:0:0|t Mark closest Auction House", GuideToAuctionHouse)
         root:CreateButton("|TInterface\\Minimap\\Tracking\\Banker:14:14:0:0|t Mark closest Bank", GuideToBank)
@@ -604,7 +654,7 @@ ns:RegisterOption({
     key = "classTrainerMenu",
     type = "toggle",
     label = "\"Mark closest Trainer\" items when right-clicking your portrait",
-    tooltip = "Adds \"Mark closest Class Trainer\", \"Mark closest Vendor (to sell)\" (nearest NPC who buys your items), \"Mark closest Mailbox\", \"Mark closest Auction House\", \"Mark closest Bank\", \"Mark closest Weapon Master\" (with a choice of weapon; only in games that still have weapon skills) and a \"Mark closest Profession Trainer\" submenu listing every profession (ones you haven't learned are greyed, but still work) to the menu you get by right-clicking your own portrait. Each puts a waypoint on the nearest matching trainer (needs QuestieDB). For a profession it looks for a trainer who teaches your next rank.",
+    tooltip = "Adds \"Mark closest Class Trainer\", \"Mark closest Vendor (to sell)\" (nearest NPC who buys your items), \"Mark closest Ammo vendor\" (hunters only: nearest bowyer / gunsmith / ammo seller),\"Mark closest Mailbox\", \"Mark closest Auction House\", \"Mark closest Bank\", \"Mark closest Weapon Master\" (with a choice of weapon; only in games that still have weapon skills) and a \"Mark closest Profession Trainer\" submenu listing every profession (ones you haven't learned are greyed, but still work) to the menu you get by right-clicking your own portrait. Each puts a waypoint on the nearest matching trainer (needs QuestieDB). For a profession it looks for a trainer who teaches your next rank.",
     default = true,
 })
 

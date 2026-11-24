@@ -12,7 +12,7 @@ local ADDON_NAME, ns = ...
 -- the tab itself (y = where the sections ended). Such a tab shows even when it has no options of its own.
 local LAYOUT = {
     { name = "Character Progression", icon = "Interface\\Icons\\Achievement_Level_10", page = "charProgress", sections = {
-        { "Reminders", { "charProgressNotify" } },
+        { "Reminders", { "charProgressNotify", "charProgressTooltip", "charProgressStatTags" } },
     } },
     { name = "Map", icon = "Interface\\Icons\\INV_Misc_Map_01", sections = {
         { "Zooming", { "mapSheetZoom", "mapSheet", "mapSheetFull", "mapSeamless", "mapExtraZoomIn", "mapRemember" } },
@@ -61,6 +61,8 @@ local OTHER_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
 local SIDEBAR_W, CONTENT_W = 150, 470
 local TITLE_H, FOOTER_H = 40, 26
 local PADDING = 16               -- left margin of controls inside a tab
+local SCROLL_W = 24              -- right-hand strip kept free for a tab's scrollbar
+local SCREEN_MARGIN = 40         -- the window never gets taller than the screen minus this
 local ACCENT = { 0.2, 1, 0.6 }   -- same green as the chat prefix
 local BG = { 0.06, 0.06, 0.08, 0.96 }
 local SIDEBAR_BG = { 0.03, 0.03, 0.045, 0.9 }
@@ -272,7 +274,7 @@ local function CreateText(parent, def, y)
         eb:SetJustifyH("CENTER")
     else
         label:SetPoint("TOPLEFT", PADDING + 30, y - 4)
-        eb:SetSize(CONTENT_W - PADDING * 2 - 40, 20)
+        eb:SetSize(CONTENT_W - PADDING * 2 - 40 - SCROLL_W, 20)   -- (room for the tab's scrollbar)
         eb:SetPoint("TOPLEFT", PADDING + 34, y - 20)
     end
 
@@ -519,26 +521,47 @@ function ns:CreateOptionsUI()
         page:SetPoint("BOTTOM", f, "BOTTOM", 0, FOOTER_H)
         page:Hide()
 
+        local custom = tab.page and ns.customPages[tab.page]
+        -- Plain tabs build into a scrolling child, so a long tab (Map) scrolls instead of
+        -- pushing the window off the bottom of the screen. Custom tabs scroll their own part.
+        local holder, scroll = page, nil
+        if not custom then
+            scroll = CreateFrame("ScrollFrame", nil, page, "UIPanelScrollFrameTemplate")
+            scroll:SetPoint("TOPLEFT", 0, -1)
+            scroll:SetPoint("BOTTOMRIGHT", -SCROLL_W, 1)
+            holder = CreateFrame("Frame", nil, scroll)
+            holder:SetSize(CONTENT_W - SCROLL_W, 10)
+            scroll:SetScrollChild(holder)
+        end
+
         local y = -14
         for s, section in ipairs(tab.sections) do
             if s > 1 then y = y - 10 end
-            y = y - CreateHeading(page, section.title, y)
+            y = y - CreateHeading(holder, section.title, y)
             for _, def in ipairs(section.defs) do
                 local build = builders[def.type]
                 if build then
-                    local control, height = build(page, def, y)
+                    local control, height = build(holder, def, y)
                     table.insert(controls, control)
                     y = y - height
                 end
             end
         end
-        local custom = tab.page and ns.customPages[tab.page]
         if custom then
             -- the custom part scrolls inside the page, so it doesn't decide the window's height
             local ok, err = pcall(custom, page, y - 6, CONTENT_W)
             if not ok then ns:Print("couldn't build the " .. tab.name .. " tab: " .. tostring(err)) end
         else
             tallest = math.max(tallest, -y + 12)
+            holder:SetHeight(-y + 12)
+            -- only show the scrollbar when the tab is actually taller than the window
+            local function UpdateBar()
+                local need = holder:GetHeight() > scroll:GetHeight() + 1
+                if scroll.ScrollBar then scroll.ScrollBar:SetShown(need) end
+                if not need then scroll:SetVerticalScroll(0) end
+            end
+            scroll:SetScript("OnSizeChanged", UpdateBar)
+            page:HookScript("OnShow", function() C_Timer.After(0, UpdateBar) end)
         end
 
         pages[i] = page
@@ -546,7 +569,15 @@ function ns:CreateOptionsUI()
     end
 
     local sideNeeded = math.max(8 + #tabs * 30 + 8, 560)   -- (560: room for the scrolling custom pages)
-    f:SetSize(SIDEBAR_W + CONTENT_W + 2, TITLE_H + math.max(tallest, sideNeeded) + FOOTER_H + 2)
+    local wantH = TITLE_H + math.max(tallest, sideNeeded) + FOOTER_H + 2
+    -- never taller than the screen (the tabs scroll instead); re-checked on every open
+    -- in case the UI scale or resolution changed
+    local function FitHeight()
+        local screenH = UIParent:GetHeight() or wantH
+        f:SetHeight(math.max(300, math.min(wantH, screenH - SCREEN_MARGIN)))
+    end
+    f:SetWidth(SIDEBAR_W + CONTENT_W + 2)
+    FitHeight()
 
     -- (for /p13 commands that open a tab by name)
     ns.SelectOptionsTab = function(name)
@@ -557,7 +588,7 @@ function ns:CreateOptionsUI()
     Select((saved and pages[saved]) and saved or 1)
 
     f.controls = controls
-    f:SetScript("OnShow", function() ns:RefreshOptions() end)
+    f:SetScript("OnShow", function() FitHeight(); ns:RefreshOptions() end)
     ns.optionsFrame = f
 
     -- Entry in the game's Options > AddOns list that opens the window

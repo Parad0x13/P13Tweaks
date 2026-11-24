@@ -79,6 +79,7 @@ local Check
 
 local function GuideToAmmo()
     if not ns.GuideToNpc then return end
+    -- (also used by "Mark closest Ammo vendor" in the portrait right-click menu, ProfCap.lua)
     if not ns.GuideToNpc("AMMO", "Ammo vendor") then
         ns:Print("|cffffd200No ammo vendor (bowyer / gunsmith) found nearby - trying General Goods, who often sell basic ammo.|r")
         if not ns.GuideToNpc("GOODS", "General Goods") then
@@ -157,7 +158,8 @@ ns:RegisterOption({
     onChange = function() state = "ok"; dismissed = nil; Check() end,
 })
 
-ns:RegisterCommand("ammo", "waypoint to the nearest ammo vendor (bowyer / gunsmith)", GuideToAmmo)
+ns.GuideToAmmo = GuideToAmmo
+ns:RegisterCommand("ammo","waypoint to the nearest ammo vendor (bowyer / gunsmith)", GuideToAmmo)
 
 local events = CreateFrame("Frame")
 events:RegisterEvent("PLAYER_LOGIN")

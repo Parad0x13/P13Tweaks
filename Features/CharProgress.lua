@@ -43,8 +43,121 @@ local GetItemStats = (C_Item and C_Item.GetItemStats) or _G.GetItemStats
 -- Talents (classic-style API: three trees, GetTalentInfo(tab, i) -> name, icon, tier, column, rank, maxRank)
 ---------------------------------------------------------------------------
 
+-- WoW Forever doesn't use the old three-tab talent API: it shows the three classic trees
+-- side by side in ONE modern talent tree (C_ClassTalents / C_Traits), and the old calls
+-- read nothing there - so every point looked unspent. Trees are told apart by position
+-- (a much wider gap between columns starts the next tree - same trick Leatrix Plus uses
+-- on Forever), and the trees aren't named by the game, so names come from this table.
+local TREE_NAMES = {
+    WARRIOR = { "Arms", "Fury", "Protection" },        PALADIN = { "Holy", "Protection", "Retribution" },
+    HUNTER  = { "Beast Mastery", "Marksmanship", "Survival" },
+    ROGUE   = { "Assassination", "Combat", "Subtlety" }, PRIEST = { "Discipline", "Holy", "Shadow" },
+    SHAMAN  = { "Elemental", "Enhancement", "Restoration" }, MAGE = { "Arcane", "Fire", "Frost" },
+    WARLOCK = { "Affliction", "Demonology", "Destruction" }, DRUID = { "Balance", "Feral Combat", "Restoration" },
+}
+
+local SpellName = (C_Spell and C_Spell.GetSpellName) or function(id) return (GetSpellInfo(id)) end
+
+-- Fills t from the modern talent tree. Returns false if this client doesn't have one.
+local function ReadTraitTalents(t)
+    if not (C_ClassTalents and C_ClassTalents.GetActiveConfigID and C_Traits and C_Traits.GetConfigInfo) then return false end
+    local okC, configID = pcall(C_ClassTalents.GetActiveConfigID)
+    if not okC or not configID then return false end
+    local config = C_Traits.GetConfigInfo(configID)
+    local treeIDs = config and config.treeIDs
+    if not (treeIDs and treeIDs[1]) then return false end
+
+    local nodes = {}
+    for _, treeID in ipairs(treeIDs) do
+        for _, nodeID in ipairs(C_Traits.GetTreeNodes(treeID) or {}) do
+            local ok, node = pcall(C_Traits.GetNodeInfo, configID, nodeID)
+            if ok and node and type(node.posX) == "number" and node.isVisible ~= false then
+                local entryID = (node.activeEntry and node.activeEntry.entryID) or (node.entryIDs and node.entryIDs[1])
+                local entry = entryID and C_Traits.GetEntryInfo(configID, entryID)
+                local def = entry and entry.definitionID and C_Traits.GetDefinitionInfo(entry.definitionID)
+                local spellID = def and (def.spellID or def.overriddenSpellID)
+                local name = (def and def.overrideName and def.overrideName ~= "" and def.overrideName)
+                    or (spellID and SpellName(spellID))
+                if name then
+                    nodes[#nodes + 1] = { node = node, name = name, spellID = spellID }
+                end
+            end
+        end
+    end
+    if #nodes == 0 then return false end
+
+    -- purchased ranks (activeRank also counts ranks the game hands out for free)
+    local anyBought = false
+    for _, n in ipairs(nodes) do if (n.node.ranksPurchased or 0) > 0 then anyBought = true; break end end
+
+    -- split columns into trees where the gap is much wider than the usual one
+    local xsSet, xs = {}, {}
+    for _, n in ipairs(nodes) do
+        if not xsSet[n.node.posX] then xsSet[n.node.posX] = true; xs[#xs + 1] = n.node.posX end
+    end
+    table.sort(xs)
+    local gaps = {}
+    for i = 2, #xs do gaps[#gaps + 1] = xs[i] - xs[i - 1] end
+    table.sort(gaps)
+    local usualGap = gaps[math.ceil(#gaps / 2)] or 0
+    local treeOfX, treeNo, colInTree = {}, 1, {}
+    local col = 0
+    for i, x in ipairs(xs) do
+        if i > 1 and x - xs[i - 1] > usualGap * 1.5 then treeNo = treeNo + 1; col = 0 end
+        col = col + 1
+        treeOfX[x], colInTree[x] = treeNo, col
+    end
+
+    local _, classFile = UnitClass("player")
+    local names = TREE_NAMES[classFile or ""] or {}
+    for i = 1, treeNo do
+        t.trees[i] = { name = names[i] or ("Tree " .. i), spent = 0, index = i, talents = {}, rows = {} }
+    end
+    -- rows: each tree's distinct heights, top to bottom = tier 1, 2, 3...
+    for _, n in ipairs(nodes) do
+        local tree = t.trees[treeOfX[n.node.posX]]
+        tree.rows[n.node.posY or 0] = true
+    end
+    for _, tree in ipairs(t.trees) do
+        local ys = {}
+        for y in pairs(tree.rows) do ys[#ys + 1] = y end
+        table.sort(ys)
+        tree.rows = {}
+        for i, y in ipairs(ys) do tree.rows[y] = i end
+    end
+
+    for _, n in ipairs(nodes) do
+        local node = n.node
+        local tree = t.trees[treeOfX[node.posX]]
+        local rank = tonumber(anyBought and node.ranksPurchased or node.activeRank) or 0
+        local e = { name = n.name, spellID = n.spellID, tier = tree.rows[node.posY or 0] or 1, column = colInTree[node.posX],
+                    rank = rank, max = tonumber(node.maxRanks) or 0, tab = tree.index, index = node.ID, tree = tree }
+        tree.talents[#tree.talents + 1] = e
+        t.byName[n.name:lower()] = e
+        tree.spent = tree.spent + rank
+        t.spent = t.spent + rank
+    end
+
+    -- unspent points = the tree's talent currency
+    if C_Traits.GetTreeCurrencyInfo then
+        local ok, cur = pcall(C_Traits.GetTreeCurrencyInfo, configID, treeIDs[1], false)
+        if ok and type(cur) == "table" and cur[1] and type(cur[1].quantity) == "number" then
+            t.unspent = cur[1].quantity
+        end
+    end
+    return true
+end
+
 local function ReadTalents()
     local t = { trees = {}, byName = {}, spent = 0 }
+    if ReadTraitTalents(t) then
+        local level = UnitLevel("player") or 1
+        t.unspent = t.unspent or math.max(0, level - 9 - t.spent)
+        local top
+        for _, tree in ipairs(t.trees) do if not top or tree.spent > top.spent then top = tree end end
+        t.top = (top and top.spent > 0) and top or nil
+        return t
+    end
     local nTabs = (GetNumTalentTabs and GetNumTalentTabs()) or 0
     for tab = 1, nTabs do
         -- the return list differs between clients (name first, or an id first): take the first string
@@ -214,31 +327,85 @@ end
 local function Weights(build)
     local _, token = UnitClass("player")
     local w, src = RXPWeights(token, UnitLevel("player") or 1, build and build.tree)
-    if w then return w, src end
-    return OwnWeights(build), "built-in"
+    if not w then w, src = OwnWeights(build), "built-in" end
+    -- A little value for armor, so plain white items (armor only, no stats) still compare
+    -- instead of scoring 0. ~100 armor = 2 points, about one Agility for a hunter.
+    if next(w) and not w.RESISTANCE0_NAME then w.RESISTANCE0_NAME = 0.02 end
+    return w, src
 end
 
 local RANGED_LOC = { INVTYPE_RANGED = true, INVTYPE_RANGEDRIGHT = true, INVTYPE_THROWN = true }
 
-local function Score(link, w, equipLoc)
-    local ok, stats = pcall(GetItemStats, link)
-    if not ok or type(stats) ~= "table" then return nil end
-    local s = 0
-    for k, v in pairs(stats) do
-        if type(v) == "number" then
-            if k == "ITEM_MOD_DAMAGE_PER_SECOND_SHORT" then
-                local _, token = UnitClass("player")
-                if RANGED_LOC[equipLoc] then
-                    s = s + v * (w.ITEM_MOD_DAMAGE_PER_SECOND_SHORT_RANGED or w[k] or 0)
-                else
-                    -- a hunter's melee weapon is mostly a stat stick
-                    s = s + v * (w[k] or 0) * (token == "HUNTER" and 0.15 or 1)
-                end
-            elseif w[k] then
-                s = s + v * w[k]
+-- Stats written as green "Equip:" lines ("Equip: Increases attack power by 10.",
+-- "Equip: Improves your chance to get a critical strike by 1%.") are often missing from
+-- GetItemStats on classic-style items - so they were scored as nothing, while Pawn (which
+-- reads the tooltip text) counted them. Read them from the item's tooltip text too.
+local EQUIP_PATTERNS = {
+    { "^Equip: Increases ranged attack power by (%d+)", "ITEM_MOD_RANGED_ATTACK_POWER_SHORT" },
+    { "^Equip: %+(%d+) ranged Attack Power", "ITEM_MOD_RANGED_ATTACK_POWER_SHORT" },
+    { "^Equip: Increases attack power by (%d+)", "ITEM_MOD_ATTACK_POWER_SHORT" },
+    { "^Equip: %+(%d+) Attack Power", "ITEM_MOD_ATTACK_POWER_SHORT" },
+    { "^Equip: Improves your chance to get a critical strike by (%d+)%%", "ITEM_MOD_CRIT_RATING_SHORT" },
+    { "^Equip: Improves your chance to hit by (%d+)%%", "ITEM_MOD_HIT_RATING_SHORT" },
+    { "^Equip: Restores (%d+) mana per 5 sec", "ITEM_MOD_MANA_REGENERATION_SHORT" },
+    { "^Equip: Restores (%d+) health per 5 sec", "ITEM_MOD_HEALTH_REGEN_SHORT" },
+    { "^Equip: Increases damage and healing done by magical spells and effects by up to (%d+)", "ITEM_MOD_SPELL_POWER_SHORT" },
+    { "^Equip: Increases healing done by spells and effects by up to (%d+)", "ITEM_MOD_SPELL_HEALING_DONE_SHORT" },
+    { "^Equip: Increases your chance to dodge an attack by (%d+)%%", "ITEM_MOD_DODGE_RATING_SHORT" },
+    { "^Equip: Increased Defense %+(%d+)", "ITEM_MOD_DEFENSE_SKILL_RATING_SHORT" },
+}
+local textBonusCache = {}
+local function TextBonuses(link)
+    local hit = textBonusCache[link]
+    if hit then return hit end
+    if not (C_TooltipInfo and C_TooltipInfo.GetHyperlink) then return {} end
+    local ok, data = pcall(C_TooltipInfo.GetHyperlink, link)
+    if not ok or not data or not data.lines then return {} end   -- not cached yet: try again next time
+    local out = {}
+    for _, l in ipairs(data.lines) do
+        local text = type(l.leftText) == "string" and l.leftText
+        if text and text:find("^Equip:") then
+            for _, p in ipairs(EQUIP_PATTERNS) do
+                local n = tonumber(text:match(p[1]))
+                if n then out[p[2]] = (out[p[2]] or 0) + n; break end
             end
         end
     end
+    textBonusCache[link] = out
+    return out
+end
+
+-- Score of an item for weights w. With `parts` (a table), also fills { {stat name, amount, points}, ... }.
+local function Score(link, w, equipLoc, parts)
+    local ok, stats = pcall(GetItemStats, link)
+    if not ok or type(stats) ~= "table" then return nil end
+    local all = {}
+    for k, v in pairs(stats) do if type(v) == "number" then all[k] = v end end
+    for k, v in pairs(TextBonuses(link)) do
+        if not all[k] then all[k] = v end   -- only if the game didn't list it already
+    end
+    local s = 0
+    local _, token = UnitClass("player")
+    for k, v in pairs(all) do
+        local pts = 0
+        if k == "ITEM_MOD_DAMAGE_PER_SECOND_SHORT" then
+            if RANGED_LOC[equipLoc] then
+                pts = v * (w.ITEM_MOD_DAMAGE_PER_SECOND_SHORT_RANGED or w[k] or 0)
+            else
+                -- a hunter's melee weapon is mostly a stat stick
+                pts = v * (w[k] or 0) * (token == "HUNTER" and 0.15 or 1)
+            end
+        elseif w[k] then
+            pts = v * w[k]
+        end
+        s = s + pts
+        if parts and v ~= 0 then
+            local name = (k == "RESISTANCE0_NAME" and "Armor") or (k == "ITEM_MOD_DAMAGE_PER_SECOND_SHORT" and "Weapon DPS")
+                or STAT_NAMES[k] or k:gsub("^ITEM_MOD_", ""):gsub("_SHORT$", "")
+            parts[#parts + 1] = { name, v, pts }
+        end
+    end
+    if parts then table.sort(parts, function(a, b) return a[3] > b[3] end) end
     return s
 end
 
@@ -321,6 +488,215 @@ local function BagUpgrades(w)
     table.sort(out, function(a, b) return (a.gain or 99) > (b.gain or 99) end)
     return out, pending
 end
+
+---------------------------------------------------------------------------
+-- Item tooltips: "P13: upgrade - about 12% better than your Hands"
+-- Same scoring as the bag-upgrade check above, for any item you hover (bags, vendor,
+-- quest rewards, loot, chat links).
+---------------------------------------------------------------------------
+
+local tipWeights, tipBuild, tipWeightsAt = nil, nil, 0
+local function TipWeights()
+    if not tipWeights or GetTime() - tipWeightsAt > 10 then   -- talents/level rarely change; don't redo per hover
+        local ok, w, b = pcall(function()
+            DATA = DATA or ns.ProgressData
+            local build = ChosenBuild(ClassData(), ReadTalents())
+            return (Weights(build)), build
+        end)
+        tipWeights, tipBuild, tipWeightsAt = ok and w or nil, ok and b or nil, GetTime()
+    end
+    return tipWeights, tipBuild
+end
+
+---------------------------------------------------------------------------
+-- Stat tags on item tooltips: "+3 Agility  ★ best for you", "+2 Strength  useless for you"
+-- Tiers come from the plan's plain ranking ("Agility > Attack Power > Intellect > Stamina"):
+-- the first one is "best", the rest "good"; anything else the scoring values is "a little",
+-- and stats worth (almost) nothing to you are "useless".
+---------------------------------------------------------------------------
+
+local STAT_BY_NAME = {}   -- "agility" -> "ITEM_MOD_AGILITY_SHORT"
+for k, v in pairs(STAT_NAMES) do STAT_BY_NAME[v:lower()] = k end
+STAT_BY_NAME["attack power"] = "ITEM_MOD_ATTACK_POWER_SHORT"
+STAT_BY_NAME["crit"] = "ITEM_MOD_CRIT_RATING_SHORT"; STAT_BY_NAME["hit"] = "ITEM_MOD_HIT_RATING_SHORT"
+local SAME_TIER = {   -- stats that count as the same thing for the tiers
+    ITEM_MOD_RANGED_ATTACK_POWER_SHORT = "ITEM_MOD_ATTACK_POWER_SHORT",
+    ITEM_MOD_SPELL_DAMAGE_DONE_SHORT = "ITEM_MOD_SPELL_POWER_SHORT",
+}
+local TAG_MARK = "|cff01ff01|r"   -- invisible marker so a line is never tagged twice
+
+local function StatTier(key, w, build)
+    local k = SAME_TIER[key] or key
+    local listed = build and build.stats
+    if listed then
+        local i = 0
+        for part in listed:gmatch("[^>]+") do
+            i = i + 1
+            local name = strtrim(part):lower():gsub("%s*%b()", "")
+            local pk = STAT_BY_NAME[name]
+            if pk and (SAME_TIER[pk] or pk) == k then return i == 1 and "best" or "good" end
+        end
+    end
+    local v = w[key] or w[k] or 0
+    if v <= 0 then return "useless" end
+    -- per point vs your main stat; crit / hit / mana-per-5 come in small numbers, so they're never "useless"
+    local main = 0
+    for _, mk in ipairs({ "ITEM_MOD_AGILITY_SHORT", "ITEM_MOD_STRENGTH_SHORT", "ITEM_MOD_INTELLECT_SHORT", "ITEM_MOD_SPELL_POWER_SHORT" }) do
+        main = math.max(main, w[mk] or 0)
+    end
+    local small = (k == "ITEM_MOD_CRIT_RATING_SHORT" or k == "ITEM_MOD_HIT_RATING_SHORT" or k == "ITEM_MOD_MANA_REGENERATION_SHORT")
+    if small then return "good" end
+    if main > 0 and v < main * 0.15 then return "useless" end
+    return "little"
+end
+
+local TIER_TEXT = {
+    best    = "  |TInterface\\TargetingFrame\\UI-RaidTargetingIcon_1:12:12|t|cff40ff40 best for you|r",   -- (game font has no star glyph)
+    good    = "  |cff40ff40good|r",
+    little  = "  |cffffd200a little|r",
+    useless = "  |cff9d9d9duseless for you|r",
+}
+
+local function TagStatLines(tooltip)
+    if not ns:Get("charProgressStatTags") then return end
+    local name = tooltip.GetName and tooltip:GetName()
+    if not name then return end
+    local w, build = TipWeights()
+    if not (w and next(w)) then return end
+    for i = 2, tooltip:NumLines() do
+        local fs = _G[name .. "TextLeft" .. i]
+        local text = fs and fs:GetText()
+        if text and not text:find(TAG_MARK, 1, true) then
+            local key
+            local stat = text:match("^%+%d+ ([%a ]+)$")   -- "+3 Agility"
+            if stat then key = STAT_BY_NAME[stat:lower()] end
+            if not key and text:find("^Equip:") then
+                for _, p in ipairs(EQUIP_PATTERNS) do
+                    if text:match(p[1]) then key = p[2]; break end
+                end
+            end
+            if key then fs:SetText(text .. TIER_TEXT[StatTier(key, w, build)] .. TAG_MARK) end
+        end
+    end
+end
+
+local GREEN_T, GREY_T, RED_T = "|cff40ff40", "|cff9d9d9d", "|cffff6060"
+
+local function TooltipVerdict(link, lines)
+    if not (link and ns:Get("charProgressTooltip")) then return end
+    local loc = select(9, GetItemInfo(link))
+    local slots = loc and SLOTS_OF[loc]
+    if not slots then return end   -- not gear (grey gear still counts: it can beat an empty slot)
+    -- the game colours what you can't use red (wrong armor type, class...). Too high a level
+    -- is still compared - you'll want to know if it's worth keeping until then.
+    local needLevel
+    for _, l in ipairs(lines or {}) do
+        if IsRed(l.leftColor) or IsRed(l.rightColor) then
+            local lvl = type(l.leftText) == "string" and tonumber(l.leftText:match("^Requires Level (%d+)"))
+            if lvl then needLevel = lvl else return end
+        end
+    end
+    local later = needLevel and (" (once you're level " .. needLevel .. ")") or ""
+    for _, inv in ipairs(slots) do   -- hovering something you're wearing: nothing to compare
+        if GetInventoryItemLink("player", inv) == link then return end
+    end
+    local w = TipWeights()
+    if not w then return end
+    -- Hold Shift: list what was counted on this item and on the one it's compared with
+    local why = IsShiftKeyDown() and {} or nil
+    local function Explain(title, parts, total)
+        if not why then return end
+        why[#why + 1] = ("|cffffd200%s: %.1f points|r"):format(title, total or 0)
+        if #parts == 0 then why[#why + 1] = GREY_T .. "   (no stats found)|r" end
+        for _, p in ipairs(parts) do
+            why[#why + 1] = ("%s   %s %s  = %.1f|r"):format(p[3] > 0 and "|cffffffff" or GREY_T,
+                (p[1] == "Weapon DPS" and ("%.1f"):format(p[2]) or tostring(math.floor(p[2] + 0.5))), p[1], p[3])
+        end
+    end
+    local myParts = why and {} or nil
+    local score = Score(link, w, loc, myParts)
+    if not score then return end   -- item data not loaded yet; the game re-shows the tooltip when it is
+    if score <= 0 then return GREY_T .. "P13: nothing on it that helps you|r" end
+    if why then Explain("This item", myParts, score) end
+
+    local eqParts = {}
+    local function EqScore(inv)
+        local l = GetInventoryItemLink("player", inv)
+        if not l then return nil end
+        local parts = why and {} or nil
+        local sc = Score(l, w, (select(9, GetItemInfo(l))), parts) or 0
+        eqParts[inv] = { link = l, parts = parts, score = sc }
+        return sc
+    end
+    local dual = DualWields()
+    local worstInv, worst, empty
+    for _, inv in ipairs(slots) do
+        if not (inv == 17 and loc == "INVTYPE_WEAPON" and not dual) then
+            local sc = EqScore(inv)
+            if inv == 17 then
+                local main = GetInventoryItemLink("player", 16)
+                if main and select(9, GetItemInfo(main)) == "INVTYPE_2HWEAPON" then sc = math.huge end
+            end
+            if sc == nil then empty = empty or inv; sc = 0 end
+            if sc ~= math.huge and (not worst or sc < worst) then worst, worstInv = sc, inv end
+        end
+    end
+    if loc == "INVTYPE_2HWEAPON" then
+        worst, worstInv = (EqScore(16) or 0) + (EqScore(17) or 0), 16
+        empty = (not GetInventoryItemLink("player", 16)) and 16 or nil
+    end
+    if not worstInv then return end
+    local slotName = SLOT_NAMES[worstInv]
+    if why then
+        local e = eqParts[worstInv]
+        if e then Explain("Your " .. slotName .. " (" .. (GetItemInfo(e.link) or "?") .. ")", e.parts or {}, e.score)
+        else why[#why + 1] = GREY_T .. "Your " .. slotName .. ": empty|r" end
+    else
+        why = { GREY_T .. "(hold Shift for the breakdown)|r" }
+    end
+    if empty and worst == 0 then
+        return GREEN_T .. "P13: upgrade - you have nothing in " .. slotName .. later .. "|r", why
+    end
+    if worst <= 0 then return GREEN_T .. "P13: upgrade over your " .. slotName .. later .. "|r", why end
+    local pct = math.floor((score / worst - 1) * 100 + 0.5)
+    if pct >= 3 then
+        return GREEN_T .. ("P13: upgrade +%d%% over your %s%s|r"):format(pct, slotName, later), why
+    elseif pct > -3 then
+        return GREY_T .. ("P13: about the same as your %s (%+d%%)%s|r"):format(slotName, pct, later), why
+    else
+        return RED_T .. ("P13: worse -%d%% vs your %s|r"):format(-pct, slotName), why
+    end
+end
+
+local function OnItemTooltip(tooltip, data)
+    local ok, _, link = pcall(tooltip.GetItem, tooltip)
+    if not ok or not link then return end
+    pcall(TagStatLines, tooltip)
+    local okV, text, why = pcall(TooltipVerdict, link, data and data.lines)
+    if okV and text then
+        tooltip:AddLine(text)
+        for _, l in ipairs(why or {}) do tooltip:AddLine(l) end
+        tooltip:Show()   -- resize for the new lines
+    end
+end
+
+if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum and Enum.TooltipDataType then
+    TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tooltip, data)
+        if tooltip == GameTooltip or tooltip == ItemRefTooltip then OnItemTooltip(tooltip, data) end
+    end)
+else
+    GameTooltip:HookScript("OnTooltipSetItem", function(self) OnItemTooltip(self, nil) end)
+    if ItemRefTooltip then ItemRefTooltip:HookScript("OnTooltipSetItem", function(self) OnItemTooltip(self, nil) end) end
+end
+
+-- pressing / releasing Shift over an item redraws the tooltip, so the breakdown appears
+local shiftWatch = CreateFrame("Frame")
+shiftWatch:RegisterEvent("MODIFIER_STATE_CHANGED")
+shiftWatch:SetScript("OnEvent", function(_, _, key)
+    if not (key == "LSHIFT" or key == "RSHIFT") or not GameTooltip:IsShown() or not GameTooltip.RefreshData then return end
+    local ok, _, link = pcall(GameTooltip.GetItem, GameTooltip)
+    if ok and link then pcall(GameTooltip.RefreshData, GameTooltip) end
+end)
 
 local function TopStats(w, n)
     local list = {}
@@ -594,7 +970,8 @@ local function DrawPlan(build, talents)
                 if lock then line = line .. RED .. ("  opens after %d more point%s in %s"):format(lock, lock == 1 and "" or "s", e.tree.name) .. R end
                 shown = shown + 1
             end
-            Bullet(line, { tip = e and { talent = { e.tab, e.index }, hint = "Open your talents (N) and click this talent." } or nil })
+            Bullet(line, { tip = e and (e.spellID and { spell = e.spellID, hint = "Open your talents (N) and click this talent." }
+                or { talent = { e.tab, e.index }, hint = "Open your talents (N) and click this talent." }) or nil })
         end
     end
     if doneN == total and total > 0 then
@@ -766,13 +1143,18 @@ function Refresh()
         Bullet("You can wear: " .. WHITE .. table.concat(now, ", ") .. R .. (#later > 0 and (GREY .. "  (" .. table.concat(later, ", ") .. ")" .. R) or ""))
     end
     if cls.weapons then Bullet("Weapons: " .. cls.weapons) end
-    local top = TopStats(w, 4)
-    if #top > 0 then
-        Bullet("Best stats for you right now: " .. WHITE .. table.concat(top, " > ") .. R .. GREY .. "  (" .. (wSrc == "built-in" and "P13 estimate" or ("RestedXP weights: " .. wSrc)) .. ")" .. R)
-    elseif build and build.stats then
+    -- The plain ranking first. (Ranking the weights per POINT put crit / hit / mana-per-5 above
+    -- Agility - true per point, but items give "+1% crit" vs "+10 Agility", so it misled.)
+    if build and build.stats then
         Bullet("Best stats: " .. WHITE .. build.stats .. R)
+    else
+        local top = TopStats(w, 4)
+        if #top > 0 then
+            Bullet("Best stats (per point - crit and hit come in small numbers like +1%): " .. WHITE .. table.concat(top, " > ") .. R)
+        end
     end
-    if build and build.stats and #top > 0 then Bullet(GREY .. "Simple version: " .. build.stats .. R) end
+    Bullet("Not sure about an item? Hover it: the tooltip says if it's an upgrade and by about how much"
+        .. GREY .. " (" .. (wSrc == "built-in" and "P13 scoring" or ("RestedXP weights: " .. wSrc)) .. ")" .. R)
     List(cls.gear)
 
     -------------------------------------------------- Where to level
@@ -894,7 +1276,8 @@ end
 local ev = CreateFrame("Frame")
 for _, e in ipairs({ "PLAYER_LOGIN", "PLAYER_LEVEL_UP", "CHARACTER_POINTS_CHANGED", "PLAYER_TALENT_UPDATE",
     "ACTIVE_TALENT_GROUP_CHANGED", "PLAYER_EQUIPMENT_CHANGED", "BAG_UPDATE_DELAYED", "SKILL_LINES_CHANGED",
-    "QUEST_TURNED_IN", "TRAINER_SHOW", "UPDATE_INVENTORY_DURABILITY" }) do
+    "QUEST_TURNED_IN", "TRAINER_SHOW", "UPDATE_INVENTORY_DURABILITY",
+    "TRAIT_CONFIG_UPDATED", "TRAIT_TREE_CURRENCY_INFO_UPDATED" }) do   -- (Forever's modern talent tree)
     pcall(ev.RegisterEvent, ev, e)
 end
 local bagsQuietUntil = 0
@@ -939,7 +1322,19 @@ ns:RegisterOption({
     tooltip = "On level-up: how many talent points you have and where the next one goes in your plan, and whether your class trainer has new spells.\nWhen you loot or buy gear that scores better than what you wear: a chat line with the item.\n\nThe full picture is always on this tab.",
 })
 
-ns:RegisterCommand("build", "open the Character Progression tab", function()
+ns:RegisterOption({
+    key = "charProgressTooltip", type = "toggle", default = true,
+    label = "Item tooltips say if an item is an upgrade for you",
+    tooltip = "Adds a line to item tooltips (bags, vendors, quest rewards, loot, chat links):\n|cff40ff40P13: upgrade +12% over your Hands|r\n|cff9d9d9dP13: about the same as your Hands (+1%)|r\n|cffff6060P13: worse -8% vs your Hands|r\n\nScored with your class and talent plan's stat values (or RestedXP's, if installed), plus a little for armor. Items too high level are still compared (\"once you're level 22\"); items you can't wear at all (wrong armor type, class) get no line. It's a guide, not exact maths.",
+})
+
+ns:RegisterOption({
+    key = "charProgressStatTags", type = "toggle", default = true,
+    label = "Item tooltips say which stats matter to you",
+    tooltip = "Tags each stat line on an item:\n+3 Agility  |TInterface\\TargetingFrame\\UI-RaidTargetingIcon_1:12:12|t|cff40ff40 best for you|r\n+5 Attack Power  |cff40ff40good|r\n+2 Spirit  |cffffd200a little|r\n+2 Strength  |cff9d9d9duseless for you|r\n\nBased on your class and talent plan (Character Progression tab).",
+})
+
+ns:RegisterCommand("build","open the Character Progression tab", function()
     local f = ns.optionsFrame
     if not f then return end
     f:Show()
