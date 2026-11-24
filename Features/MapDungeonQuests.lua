@@ -43,6 +43,7 @@ local DUNGEONS = {
 }
 local byKey = {}
 for _, d in ipairs(DUNGEONS) do byKey[d.key] = d end
+ns.DungeonList = DUNGEONS   -- (CharProgress leaves dungeon quests out of its per-zone counts)
 
 local function Lib()
     local lib = _G.LibQuestieDB

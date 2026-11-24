@@ -8,7 +8,12 @@ local ADDON_NAME, ns = ...
 -- Layout: tab -> sections -> option keys (in display order)
 ---------------------------------------------------------------------------
 
+-- A tab can also have `page = "<id>"`: after its sections, ns.customPages[id](page, y, width) draws the rest of
+-- the tab itself (y = where the sections ended). Such a tab shows even when it has no options of its own.
 local LAYOUT = {
+    { name = "Character Progression", icon = "Interface\\Icons\\Achievement_Level_10", page = "charProgress", sections = {
+        { "Reminders", { "charProgressNotify" } },
+    } },
     { name = "Map", icon = "Interface\\Icons\\INV_Misc_Map_01", sections = {
         { "Zooming", { "mapSheetZoom", "mapSheet", "mapSheetFull", "mapSeamless", "mapExtraZoomIn", "mapRemember" } },
         { "Finding yourself", { "mapPlayerCircle", "mapMiddleClick", "mapSmoothPan", "mapPartyCycle" } },
@@ -349,7 +354,7 @@ local function BuildTabs()
 
     local tabs = {}
     for _, t in ipairs(LAYOUT) do
-        local tab = { name = t.name, icon = t.icon, sections = {} }
+        local tab = { name = t.name, icon = t.icon, page = t.page, sections = {} }
         for _, s in ipairs(t.sections) do
             local defs = {}
             for _, key in ipairs(s[2]) do
@@ -360,7 +365,7 @@ local function BuildTabs()
             end
             if #defs > 0 then table.insert(tab.sections, { title = s[1], defs = defs }) end
         end
-        if #tab.sections > 0 then table.insert(tabs, tab) end
+        if #tab.sections > 0 or (tab.page and ns.customPages[tab.page]) then table.insert(tabs, tab) end
     end
 
     local rest = {}
@@ -397,6 +402,14 @@ local function CreateTabButton(parent, tab, index, onClick)
     b.text = b:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     b.text:SetPoint("LEFT", icon, "RIGHT", 8, 0)
     b.text:SetText(tab.name)
+    -- a long name ("Character Progression") gets the small font, and wraps if even that is too wide
+    local room = SIDEBAR_W - 12 - 36 - 4
+    if b.text:GetStringWidth() > room then
+        b.text:SetFontObject("GameFontHighlightSmall")
+        b.text:SetWidth(room)
+        b.text:SetJustifyH("LEFT")
+        b.text:SetWordWrap(true)
+    end
 
     function b:SetSelected(on)
         self.selected = on
@@ -519,14 +532,26 @@ function ns:CreateOptionsUI()
                 end
             end
         end
-        tallest = math.max(tallest, -y + 12)
+        local custom = tab.page and ns.customPages[tab.page]
+        if custom then
+            -- the custom part scrolls inside the page, so it doesn't decide the window's height
+            local ok, err = pcall(custom, page, y - 6, CONTENT_W)
+            if not ok then ns:Print("couldn't build the " .. tab.name .. " tab: " .. tostring(err)) end
+        else
+            tallest = math.max(tallest, -y + 12)
+        end
 
         pages[i] = page
         buttons[i] = CreateTabButton(sidebar, tab, i, function() Select(i) end)
     end
 
-    local sideNeeded = 8 + #tabs * 30 + 8
+    local sideNeeded = math.max(8 + #tabs * 30 + 8, 560)   -- (560: room for the scrolling custom pages)
     f:SetSize(SIDEBAR_W + CONTENT_W + 2, TITLE_H + math.max(tallest, sideNeeded) + FOOTER_H + 2)
+
+    -- (for /p13 commands that open a tab by name)
+    ns.SelectOptionsTab = function(name)
+        for i, tab in ipairs(tabs) do if tab.name == name then Select(i) return true end end
+    end
 
     local saved = tonumber(P13TweaksDB.optionsTab)
     Select((saved and pages[saved]) and saved or 1)

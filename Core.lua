@@ -7,6 +7,7 @@ ns.name = "P13Tweaks"
 ns.version = ns.version or (C_AddOns and C_AddOns.GetAddOnMetadata and C_AddOns.GetAddOnMetadata(ADDON_NAME, "Version"))
     or (GetAddOnMetadata and GetAddOnMetadata(ADDON_NAME, "Version")) or "?"
 ns.options = {}   -- ordered list of option definitions
+ns.customPages = {}   -- tab page id -> function(page, y, width) that draws a tab's own content (see Options.lua LAYOUT)
 
 -- Print a message with the addon's colored prefix.
 function ns:Print(msg)
