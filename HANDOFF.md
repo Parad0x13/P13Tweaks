@@ -1,4 +1,15 @@
-# P13Tweaks – Handoff (2026-11-25, v0.31.13)
+# P13Tweaks – Handoff (2026-11-25, v0.31.15)
+
+## v0.31.15 (2026-11-25) - gear scoring for every talent tree
+User: "for gear recommendations account for each of the talent trees instead of just one". Not tested in game (no Lua on this PC).
+- `CharProgress.lua`: `TreeGroups(cls, talents, build)` gives weights for each of the class's 3 trees; trees with identical weights (by `WeightsSig`) share a group, e.g. "Arms/Fury". Main group first = `talents.top` (most points), else the plan's tree. **Change:** main weights now follow your top tree even if the chosen plan is another tree (Holy paladin with a Ret plan gets healer weights).
+- Per-tree source (`WeightsForTree`): RestedXP set whose Spec names the tree (`RXPWeights(..., strict)`: never another tree's set; no-Spec sets like Mage/Warlock count for all trees) > that tree's build plan weights > `TREE_FALLBACK` (Holy Pal, Holy/Disc Priest, Resto Shaman/Druid: **P13's own rough healer numbers, unconfirmed**) > main tree's weights.
+- `OwnWeights` now also accepts full `ITEM_MOD_*` keys (healers: damage-only spell power 0.1).
+- Tooltip: one line per group ("P13 Arms/Fury (yours): upgrade +12% ...", "P13 Protection: worse -20% ..."); single group = old single line. Shift breakdown = main group only. Verdict logic split into `TreeVerdict` (returns text, kind; "pending" / "skip").
+- Page "Gear: what to look for": "Best stats for <trees>" per group with source. Bag upgrades, chat upgrade notices and stat tags use the main tree only (`TipWeights()`).
+
+## v0.31.14 (2026-11-25) - Forever dungeons in the Dungeon quest picker
+- `MapDungeonQuests.lua` DUNGEONS: added Ruins of Lordaeron (16611 + 16612/16614/16615/16617), The Hall of Thanes (16919), Excavation Site (16732 + 16877-16880), City of Dalaran (16544, 16558, 16559). Area ids from QuestieDB `support/Forever/Zones/dungeons.lua` + `subZoneToParentZone.lua`. If one shows 0 quests, check QuestieDB has quests there. (Version.lua was left at 0.31.13 for this one; synced in 0.31.15.)
 
 ## v0.31.13 (2026-11-25) - pickup places for item-started dungeon quests
 User: button said 6 to pick up, Shift-click said none. Guess (not confirmed): those quests have no giver spawn points (item-started, or giver area missing from the area map); `counts.total` counts them anyway. Not tested in game.

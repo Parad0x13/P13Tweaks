@@ -8,7 +8,8 @@
 --   * your character, talents, gear, bags, spells and weapon skills: read live from the game
 --   * the advice (builds, abilities, tips) per class: Features/CharProgressData.lua (researched for WoW Forever)
 --   * gear scoring: RestedXP's WoW Forever stat weights when RXPGuides is loaded (read at runtime, not copied),
---     otherwise the simple weights in CharProgressData.lua
+--     otherwise the simple weights in CharProgressData.lua. Every talent tree is scored (TreeGroups); healing
+--     trees nobody has numbers for get P13's own rough healer weights (TREE_FALLBACK)
 --   * zones: QuestieDB's quest list (WoW Forever's own quests) - counts quests at your level per zone
 local ADDON_NAME, ns = ...
 
@@ -294,7 +295,9 @@ local MAIN_STATS = { "ITEM_MOD_STRENGTH_SHORT", "ITEM_MOD_AGILITY_SHORT", "ITEM_
     "ITEM_MOD_DEFENSE_SKILL_RATING_SHORT", "ITEM_MOD_MANA_REGENERATION_SHORT" }
 
 -- RestedXP's WoW Forever weights for this class / level / tree, if RXPGuides is loaded. RXP's own table is only read.
-local function RXPWeights(token, level, treeName)
+-- strict: only a set made for this tree (its Spec names it), or one with no Spec at all (Mage, Warlock: one
+-- set for every tree) - never another tree's set.
+local function RXPWeights(token, level, treeName, strict)
     local rxp = _G.RXP
     local all = type(rxp) == "table" and rxp.game == "FOREVER" and type(rxp.statWeights) == "table" and rxp.statWeights
     if not all then return end
@@ -304,8 +307,10 @@ local function RXPWeights(token, level, treeName)
         if type(d) == "table" and type(d.Class) == "string" and d.Class:upper() == token
             and (d.MIN_LEVEL or 0) <= lv and lv <= (d.MAX_LEVEL or 0) then
             local s = (tostring(d.Kind):upper() == "SPEEDRUN") and 1 or 0
-            if treeName and type(d.Spec) == "string" and d.Spec:lower():find(treeName:lower(), 1, true) then s = s + 2 end
-            if not bestScore or s > bestScore then best, bestScore = d, s end
+            local hasSpec = type(d.Spec) == "string" and d.Spec ~= ""
+            local fits = treeName and hasSpec and d.Spec:lower():find(treeName:lower(), 1, true)
+            if fits then s = s + 2 end
+            if not (strict and hasSpec and not fits) and (not bestScore or s > bestScore) then best, bestScore = d, s end
         end
     end
     if not best then return end
@@ -321,6 +326,17 @@ local function OwnWeights(build)
         if short == "DPS" then w.ITEM_MOD_DAMAGE_PER_SECOND_SHORT_RANGED = w.ITEM_MOD_DAMAGE_PER_SECOND_SHORT_RANGED or v end
         if short == "RDPS" then w.ITEM_MOD_DAMAGE_PER_SECOND_SHORT_RANGED = v end
     end
+    -- full game keys override the short ones (e.g. a healer: spell power yes, damage-only spell power hardly)
+    for k, v in pairs((build and build.weights) or {}) do
+        if k:find("^ITEM_MOD_") then w[k] = v end
+    end
+    return w
+end
+
+-- A little value for armor, so plain white items (armor only, no stats) still compare
+-- instead of scoring 0. ~100 armor = 2 points, about one Agility for a hunter.
+local function AddArmor(w)
+    if next(w) and not w.RESISTANCE0_NAME then w.RESISTANCE0_NAME = 0.02 end
     return w
 end
 
@@ -328,10 +344,80 @@ local function Weights(build)
     local _, token = UnitClass("player")
     local w, src = RXPWeights(token, UnitLevel("player") or 1, build and build.tree)
     if not w then w, src = OwnWeights(build), "built-in" end
-    -- A little value for armor, so plain white items (armor only, no stats) still compare
-    -- instead of scoring 0. ~100 armor = 2 points, about one Agility for a hunter.
-    if next(w) and not w.RESISTANCE0_NAME then w.RESISTANCE0_NAME = 0.02 end
-    return w, src
+    return AddArmor(w), src
+end
+
+-- Trees that neither RestedXP nor a build plan has weights for: the healing trees. P13's own rough numbers
+-- (Intellect, +healing, mana per 5), not from a Forever guide. Trees missing from here and from both other
+-- sources (Rogue Assassination / Subtlety, Mage and Warlock without RestedXP...) use your main tree's weights.
+local HEALER = { INT = 1, SPI = 0.6, STA = 0.5, SP = 1, HEAL = 1, MP5 = 2.5, CRIT = 5, ARMOR = 0.01,
+    ITEM_MOD_SPELL_DAMAGE_DONE_SHORT = 0.1 }
+local function Healer(spirit) local t = {}; for k, v in pairs(HEALER) do t[k] = v end; t.SPI = spirit; return t end
+local TREE_FALLBACK = {
+    PALADIN = { Holy = Healer(0.3) },
+    PRIEST  = { Holy = Healer(0.9), Discipline = Healer(0.8) },
+    SHAMAN  = { Restoration = Healer(0.4) },
+    DRUID   = { Restoration = Healer(0.9) },
+}
+
+-- Weights made for one talent tree, or nil if there are none (then that tree is scored like your main one).
+local function WeightsForTree(cls, treeName)
+    local _, token = UnitClass("player")
+    local level = UnitLevel("player") or 1
+    local pick   -- this tree's build plan (for its plain "best stats" list, and its weights without RestedXP)
+    for _, b in ipairs((cls and cls.builds) or {}) do
+        if b.tree == treeName and b.weights and (not pick or ((level < 60) == (b.levelling and true or false))) then pick = b end
+    end
+    local w, src = RXPWeights(token, level, treeName, true)
+    if w then return AddArmor(w), src, pick end
+    if pick then return AddArmor(OwnWeights(pick)), "built-in", pick end
+    local fb = TREE_FALLBACK[token] and TREE_FALLBACK[token][treeName]
+    if fb then return AddArmor(OwnWeights({ weights = fb })), "P13 estimate" end
+end
+
+local function WeightsSig(w)
+    local keys = {}
+    for k in pairs(w) do keys[#keys + 1] = k end
+    table.sort(keys)
+    for i, k in ipairs(keys) do keys[i] = ("%s=%.3f"):format(k, w[k]) end
+    return table.concat(keys, ",")
+end
+
+-- Every talent tree's weights, trees with the same weights put together:
+-- { { names = { "Arms", "Fury" }, w, src, build, main = true }, ... }, your main tree's group first.
+local function TreeGroups(cls, talents, build)
+    local _, token = UnitClass("player")
+    local names = {}
+    for _, t in ipairs(talents.trees or {}) do names[#names + 1] = t.name end
+    if #names == 0 then names = TREE_NAMES[token or ""] or {} end
+    -- main tree: the one most of your points are in, else the plan's
+    local buildTree = build and TreeByName(talents, build.tree)
+    local mainTree = talents.top or buildTree
+    local mainName = mainTree and mainTree.name or (build and build.tree)
+    local mainW, mainSrc, mainBuild
+    if mainTree and buildTree ~= mainTree then
+        mainW, mainSrc, mainBuild = WeightsForTree(cls, mainName)   -- e.g. a Holy paladin whose plan is Retribution
+    end
+    if not mainW then mainW, mainSrc = Weights(build); mainBuild = build end
+    local groups, bySig = {}, {}
+    local main = { names = {}, w = mainW, src = mainSrc, build = mainBuild, main = true }
+    groups[1], bySig[WeightsSig(mainW)] = main, main
+    for _, name in ipairs(names) do
+        local w, src, b
+        if name == mainName then w = mainW else w, src, b = WeightsForTree(cls, name) end
+        w = w or mainW
+        local sig = WeightsSig(w)
+        local g = bySig[sig]
+        if not g then
+            g = { names = {}, w = w, src = src, build = b }
+            groups[#groups + 1], bySig[sig] = g, g
+        end
+        g.names[#g.names + 1] = name
+    end
+    for i = #groups, 1, -1 do if #groups[i].names == 0 and #groups > 1 then table.remove(groups, i) end end
+    groups[1].main = true
+    for _, g in ipairs(groups) do g.label = table.concat(g.names, "/") end
+    return groups, mainW, mainSrc
 end
 
 local RANGED_LOC = { INVTYPE_RANGED = true, INVTYPE_RANGEDRIGHT = true, INVTYPE_THROWN = true }
@@ -495,17 +581,19 @@ end
 -- quest rewards, loot, chat links).
 ---------------------------------------------------------------------------
 
-local tipWeights, tipBuild, tipWeightsAt = nil, nil, 0
+local tipWeights, tipBuild, tipGroups, tipWeightsAt = nil, nil, nil, 0
 local function TipWeights()
     if not tipWeights or GetTime() - tipWeightsAt > 10 then   -- talents/level rarely change; don't redo per hover
-        local ok, w, b = pcall(function()
+        local ok, w, b, g = pcall(function()
             DATA = DATA or ns.ProgressData
-            local build = ChosenBuild(ClassData(), ReadTalents())
-            return (Weights(build)), build
+            local cls, talents = ClassData(), ReadTalents()
+            local build = ChosenBuild(cls, talents)
+            local groups, mainW = TreeGroups(cls, talents, build)
+            return mainW, build, groups
         end)
-        tipWeights, tipBuild, tipWeightsAt = ok and w or nil, ok and b or nil, GetTime()
+        tipWeights, tipBuild, tipGroups, tipWeightsAt = ok and w or nil, ok and b or nil, ok and g or nil, GetTime()
     end
-    return tipWeights, tipBuild
+    return tipWeights, tipBuild, tipGroups
 end
 
 ---------------------------------------------------------------------------
@@ -581,6 +669,7 @@ local function TagStatLines(tooltip)
 end
 
 local GREEN_T, GREY_T, RED_T = "|cff40ff40", "|cff9d9d9d", "|cffff6060"
+local TreeVerdict   -- (below)
 
 local function TooltipVerdict(link, lines)
     if not (link and ns:Get("charProgressTooltip")) then return end
@@ -600,10 +689,42 @@ local function TooltipVerdict(link, lines)
     for _, inv in ipairs(slots) do   -- hovering something you're wearing: nothing to compare
         if GetInventoryItemLink("player", inv) == link then return end
     end
-    local w = TipWeights()
+    local w, _, groups = TipWeights()
     if not w then return end
-    -- Hold Shift: list what was counted on this item and on the one it's compared with
+    if not (groups and #groups > 1) then groups = { { w = w, main = true } } end
+    -- Hold Shift: list what was counted on this item and on the one it's compared with (your main tree)
     local why = IsShiftKeyDown() and {} or nil
+    local verdicts = {}
+    for _, g in ipairs(groups) do
+        local text, kind = TreeVerdict(link, loc, slots, g.w, g.main and why or nil, later)
+        if kind == "pending" then return end   -- item data not loaded yet; the game re-shows the tooltip
+        if text then verdicts[#verdicts + 1] = { g = g, text = text, kind = kind } end
+    end
+    if #verdicts == 0 then return end
+    if #verdicts == 1 then
+        local v = verdicts[1]
+        if v.kind == "none" then return v.text end
+        if not why then why = { GREY_T .. "(hold Shift for the breakdown)|r" } end
+        return v.text, why
+    end
+    -- one line per talent tree (trees scored the same share a line), your main tree first
+    local out = {}
+    for i, v in ipairs(verdicts) do
+        local label = v.g.label .. (v.g.main and " (yours)" or "")
+        local text = v.text:gsub("^(|c%x%x%x%x%x%x%x%x)P13: ", "%1P13 " .. label .. ": ")
+        if i == 1 then out.first = text else out[#out + 1] = text end
+    end
+    if why then
+        table.insert(why, 1, GREY_T .. "Breakdown for " .. verdicts[1].g.label .. ":|r")
+    else
+        why = { GREY_T .. "(hold Shift for the breakdown)|r" }
+    end
+    for _, l in ipairs(why) do out[#out + 1] = l end
+    return out.first, out
+end
+
+-- The verdict for one set of weights: text, kind ("up" / "same" / "worse" / "none"), or nil, "pending" / "skip".
+TreeVerdict = function(link, loc, slots, w, why, later)
     local function Explain(title, parts, total)
         if not why then return end
         why[#why + 1] = ("|cffffd200%s: %.1f points|r"):format(title, total or 0)
@@ -615,8 +736,8 @@ local function TooltipVerdict(link, lines)
     end
     local myParts = why and {} or nil
     local score = Score(link, w, loc, myParts)
-    if not score then return end   -- item data not loaded yet; the game re-shows the tooltip when it is
-    if score <= 0 then return GREY_T .. "P13: nothing on it that helps you|r" end
+    if not score then return nil, "pending" end
+    if score <= 0 then return GREY_T .. "P13: nothing on it that helps you|r", "none" end
     if why then Explain("This item", myParts, score) end
 
     local eqParts = {}
@@ -645,26 +766,24 @@ local function TooltipVerdict(link, lines)
         worst, worstInv = (EqScore(16) or 0) + (EqScore(17) or 0), 16
         empty = (not GetInventoryItemLink("player", 16)) and 16 or nil
     end
-    if not worstInv then return end
+    if not worstInv then return nil, "skip" end
     local slotName = SLOT_NAMES[worstInv]
     if why then
         local e = eqParts[worstInv]
         if e then Explain("Your " .. slotName .. " (" .. (GetItemInfo(e.link) or "?") .. ")", e.parts or {}, e.score)
         else why[#why + 1] = GREY_T .. "Your " .. slotName .. ": empty|r" end
-    else
-        why = { GREY_T .. "(hold Shift for the breakdown)|r" }
     end
     if empty and worst == 0 then
-        return GREEN_T .. "P13: upgrade - you have nothing in " .. slotName .. later .. "|r", why
+        return GREEN_T .. "P13: upgrade - you have nothing in " .. slotName .. later .. "|r", "up"
     end
-    if worst <= 0 then return GREEN_T .. "P13: upgrade over your " .. slotName .. later .. "|r", why end
+    if worst <= 0 then return GREEN_T .. "P13: upgrade over your " .. slotName .. later .. "|r", "up" end
     local pct = math.floor((score / worst - 1) * 100 + 0.5)
     if pct >= 3 then
-        return GREEN_T .. ("P13: upgrade +%d%% over your %s%s|r"):format(pct, slotName, later), why
+        return GREEN_T .. ("P13: upgrade +%d%% over your %s%s|r"):format(pct, slotName, later), "up"
     elseif pct > -3 then
-        return GREY_T .. ("P13: about the same as your %s (%+d%%)%s|r"):format(slotName, pct, later), why
+        return GREY_T .. ("P13: about the same as your %s (%+d%%)%s|r"):format(slotName, pct, later), "same"
     else
-        return RED_T .. ("P13: worse -%d%% vs your %s|r"):format(-pct, slotName), why
+        return RED_T .. ("P13: worse -%d%% vs your %s|r"):format(-pct, slotName), "worse"
     end
 end
 
@@ -1029,7 +1148,7 @@ function Refresh()
     end
 
     local build, buildIdx = ChosenBuild(cls, talents)
-    local w, wSrc = Weights(build)
+    local treeGroups, w, wSrc = TreeGroups(cls, talents, build)
 
     -------------------------------------------------- Do this now
     Heading("Do this now")
@@ -1145,7 +1264,25 @@ function Refresh()
     if cls.weapons then Bullet("Weapons: " .. cls.weapons) end
     -- The plain ranking first. (Ranking the weights per POINT put crit / hit / mana-per-5 above
     -- Agility - true per point, but items give "+1% crit" vs "+10 Agility", so it misled.)
-    if build and build.stats then
+    local function SrcText(src)
+        if src == "built-in" then return "P13 scoring" end
+        if src == "P13 estimate" then return "P13's own rough healer weights - no guide has numbers for this tree" end
+        return "RestedXP weights: " .. (src or "?")
+    end
+    if #treeGroups > 1 then
+        -- every talent tree (trees that want the same stats share a line), yours first
+        for _, g in ipairs(treeGroups) do
+            local stats = g.build and g.build.stats
+            if not stats then
+                local top = TopStats(g.w, 4)
+                stats = #top > 0 and table.concat(top, " > ") or nil
+            end
+            if stats then
+                Bullet("Best stats for " .. (g.main and GOLD or WHITE) .. g.label .. R .. (g.main and (GREY .. " (your main tree)" .. R) or "")
+                    .. ": " .. WHITE .. stats .. R .. GREY .. "  (" .. SrcText(g.src) .. ")" .. R)
+            end
+        end
+    elseif build and build.stats then
         Bullet("Best stats: " .. WHITE .. build.stats .. R)
     else
         local top = TopStats(w, 4)
@@ -1154,7 +1291,8 @@ function Refresh()
         end
     end
     Bullet("Not sure about an item? Hover it: the tooltip says if it's an upgrade and by about how much"
-        .. GREY .. " (" .. (wSrc == "built-in" and "P13 scoring" or ("RestedXP weights: " .. wSrc)) .. ")" .. R)
+        .. (#treeGroups > 1 and " for each talent tree" or "")
+        .. GREY .. " (" .. SrcText(wSrc) .. ")" .. R)
     List(cls.gear)
 
     -------------------------------------------------- Where to level
@@ -1263,7 +1401,7 @@ local function Remind(reason)
         if TrainerDue() then parts[#parts + 1] = "new spells at your class trainer" end
         if #parts > 0 then ns:Print("Level up! " .. table.concat(parts, "; ") .. ". Details: /p13 > Character Progression.") end
     elseif reason == "bags" then
-        local ups = BagUpgrades((Weights(build)))
+        local ups = BagUpgrades((TipWeights()))
         for _, u in ipairs(ups) do
             if not announced[u.link] then
                 announced[u.link] = true
@@ -1285,9 +1423,9 @@ ev:SetScript("OnEvent", function(_, event)
     if event == "PLAYER_LOGIN" then
         DATA = ns.ProgressData
         bagsQuietUntil = GetTime() + 10   -- don't announce what was already in the bags at login
-        C_Timer.After(5, function() pcall(BagUpgrades, (Weights(ChosenBuild(ClassData(), ReadTalents())))) end)
+        C_Timer.After(5, function() pcall(BagUpgrades, (TipWeights())) end)
         C_Timer.After(12, function()   -- remember what's already there so it isn't announced as new
-            local ok, ups = pcall(BagUpgrades, (Weights(ChosenBuild(ClassData(), ReadTalents()))))
+            local ok, ups = pcall(BagUpgrades, (TipWeights()))
             if ok then for _, u in ipairs(ups) do announced[u.link] = true end end
         end)
         return
