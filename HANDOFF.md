@@ -377,6 +377,9 @@ link / nothing) and repairs it. Also deletes the old copy-installer leftovers (S
 desktop "Update P13Tweaks.lnk", `%LOCALAPPDATA%\P13Tweaks\`).
 Open issue (2026-11-25): on her PC the link "goes away" after a WoW restart, so pulls don't reach the game. Cause
 unknown - ask her to run link.bat again after it happens and report what it says it found.
+Same day: she found `AddOns\P13Tweaks` via Windows search and deleted its contents - through the junction that deletes
+the real clone (only `.git` survived). Recovered with `git fetch origin` + `git reset --hard origin/main` in the clone.
+Told her: never delete/copy inside AddOns\P13Tweaks; work only in the project folder; run link.bat once (WoW closed).
 
 ## Session 2026-11-17 (v0.2.0 to v0.3.2; the quest-log button was tried and replaced by a footer button in /p13) – untested in game, not yet committed
 - **Versioning**: `## Version:` in BOTH .toc files is bumped on every update (user's request, so they and their
