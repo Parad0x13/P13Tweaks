@@ -367,13 +367,16 @@ Personal quality-of-life addon for **WoW Forever** (`P13Tweaks.toc`, interface 1
 
 ## Sharing with another PC
 Git clone + junction only (no copy-based installer; it was removed in v0.3.6). Partner: install git, clone the repo
-(private: sign in / read-only token), run `link.ps1` (finds WoW on any drive, replaces a plain copied folder with a
-junction, idempotent). Updating = `git pull` + full WoW restart to see a new .toc version.
-**Her PC can't run PowerShell scripts**, so (v0.5.1) there are double-click equivalents: `Link P13Tweaks.bat`
-(same as link.ps1, pure cmd + `mklink /J`; tested on this PC) and `Update P13Tweaks.bat` (`git pull`). Both CRLF
-(`.gitattributes`). Keep link.ps1 and the .bat in step if either changes.
-Her PC may still hold leftovers from the removed installer: `%LOCALAPPDATA%\P13Tweaks\`, the Startup shortcut
-"P13Tweaks updater" and the desktop "Update P13Tweaks" shortcut. They are harmless (the updater skips links) but can be deleted.
+(private: sign in / read-only token), double-click `link.bat` once. Updating = `git pull` + full WoW restart.
+**v0.31.11: `link.bat` is the only link script** (link.ps1, `Link P13Tweaks.bat` and `Update P13Tweaks.bat` removed;
+her PC can't run PowerShell scripts). Pure cmd + `mklink /J`, CRLF via `.gitattributes`. **WoW Forever (`_forever_`)
+only** - the existing `_classic_` junction on the dev PC is left as it is; re-make it by hand (`mklink /J`) if it's ever lost.
+Finds WoW via registry + usual folders on every drive, or a folder dragged onto it / pasted when not found.
+Reports what was at `AddOns\P13Tweaks` (link here = all good / link elsewhere / PLAIN FOLDER = something replaced the
+link / nothing) and repairs it. Also deletes the old copy-installer leftovers (Startup "P13Tweaks updater.lnk",
+desktop "Update P13Tweaks.lnk", `%LOCALAPPDATA%\P13Tweaks\`).
+Open issue (2026-11-25): on her PC the link "goes away" after a WoW restart, so pulls don't reach the game. Cause
+unknown - ask her to run link.bat again after it happens and report what it says it found.
 
 ## Session 2026-11-17 (v0.2.0 to v0.3.2; the quest-log button was tried and replaced by a footer button in /p13) – untested in game, not yet committed
 - **Versioning**: `## Version:` in BOTH .toc files is bumped on every update (user's request, so they and their
