@@ -16,11 +16,16 @@ local SIZE = 30
 -- area ids (QuestieDB / AreaTable) of each dungeon and its sub-areas, with the usual level range
 local DUNGEONS = {
     { key = "RFC",  name = "Ragefire Chasm",       short = "Ragefire",   lvl = "13-18", areas = { 2437 } },
-    { key = "WC",   name = "Wailing Caverns",      short = "Wailing C.", lvl = "17-24", areas = { 718, 6511 } },
+    -- Forever's own dungeons (area ids from QuestieDB support/Forever/Zones: dungeons.lua + subZoneToParentZone.lua)
+    { key = "HOT",  name = "The Hall of Thanes",   short = "Thanes",     lvl = "13-20", areas = { 16919 } },
+    { key = "ROL",  name = "Ruins of Lordaeron",   short = "Lordaeron",  lvl = "15-22", areas = { 16611, 16612, 16614, 16615, 16617 } },
+    { key = "WC",  name = "Wailing Caverns",      short = "Wailing C.", lvl = "17-24", areas = { 718, 6511 } },
     { key = "DM",   name = "The Deadmines",        short = "Deadmines",  lvl = "17-26", areas = { 1581, 10029 } },
     { key = "SFK",  name = "Shadowfang Keep",      short = "Shadowfang", lvl = "22-30", areas = { 209, 10014, 10015, 10016, 10017, 10018, 10019 } },
     { key = "BFD",  name = "Blackfathom Deeps",    short = "Blackfathom", lvl = "24-32", areas = { 719, 10020, 10021 } },
     { key = "STOCK", name = "The Stockade",        short = "Stockade",   lvl = "24-32", areas = { 717 } },
+    { key = "EXCAV", name = "Excavation Site",     short = "Excavation", lvl = "24-33", areas = { 16732, 16877, 16878, 16879, 16880 } },
+    { key = "DALA", name = "City of Dalaran",      short = "Dalaran",    lvl = "28-35", areas = { 16544, 16558, 16559 } },
     { key = "GNOMER", name = "Gnomeregan",         short = "Gnomeregan", lvl = "29-38", areas = { 721, 10030, 10031, 10032 } },
     { key = "RFK",  name = "Razorfen Kraul",       short = "Kraul",      lvl = "29-38", areas = { 491 } },
     { key = "SM",   name = "Scarlet Monastery",    short = "Scarlet M.", lvl = "34-45", areas = { 796, 10008, 10009, 10010 } },
