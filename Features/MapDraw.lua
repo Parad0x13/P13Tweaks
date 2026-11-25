@@ -17,7 +17,10 @@ local ADDON_NAME, ns = ...
 local PREFIX = "P13M"
 local MAX_MSG = 250
 local PTS_PER_MSG = 50          -- 50 points * 4 characters + the header stays under 255 bytes
-local BURST, REFILL = 4, 1.5    -- gentle: the quest sharing uses the same game limit
+-- The game allows about 10 addon messages at once per prefix, then about one a second. The quest
+-- sharing has its own prefix, so drawing can use that whole allowance. If the game still says
+-- "too fast", the message goes back in the queue and we wait (see Pump).
+local BURST, REFILL = 10, 1.0
 local MIN_STEP_PX = 3           -- drawing: a new point once the cursor has moved this many screen pixels
 local SIMPLIFY_PX = 1.5         -- when a line is finished, points closer than this to the line through their neighbours are dropped
 local lastSimplified           -- debug text about the last finished line
@@ -135,6 +138,18 @@ end
 local SendRaw = (C_ChatInfo and C_ChatInfo.SendAddonMessage) or SendAddonMessage
 local queue, tokens, lastRefill, ticker = {}, BURST, 0, nil
 
+-- Did the game refuse the message for going too fast? (newer clients return a result code,
+-- older ones true/false; nil means the client doesn't say, so assume it went)
+local R = Enum and Enum.SendAddonMessageResult
+local function Throttled(res)
+    if res == false then return true end
+    if type(res) == "number" and R then
+        return res == R.AddonMessageThrottle or res == R.ChannelThrottle
+    end
+    return false
+end
+
+local retries = 0
 local function Pump()
     local now = GetTime()
     tokens = math.min(BURST, tokens + (now - lastRefill) / REFILL)
@@ -142,7 +157,15 @@ local function Pump()
     local ch = Channel()
     if not ch then wipe(queue) end
     while #queue > 0 and tokens >= 1 do
-        pcall(SendRaw, PREFIX, table.remove(queue, 1), ch)
+        local msg = table.remove(queue, 1)
+        local ok, res = pcall(SendRaw, PREFIX, msg, ch)
+        if ok and Throttled(res) and retries < 10 then
+            table.insert(queue, 1, msg)   -- try it again on the next tick, in the same order
+            retries = retries + 1
+            tokens = 0
+            break
+        end
+        retries = 0
         tokens = tokens - 1
     end
     if #queue == 0 and ticker then ticker:Cancel(); ticker = nil end
@@ -152,7 +175,7 @@ local function Send(msg)
     if not Channel() then return end
     table.insert(queue, msg)
     Pump()
-    if #queue > 0 and not ticker then ticker = C_Timer.NewTicker(0.4, Pump) end
+    if #queue > 0 and not ticker then ticker = C_Timer.NewTicker(0.25, Pump) end
 end
 
 local function SendStroke(s)

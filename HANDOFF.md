@@ -1,4 +1,11 @@
-# P13Tweaks – Handoff (2026-11-25, v0.31.15)
+# P13Tweaks – Handoff (2026-11-25, v0.31.16)
+
+## v0.31.16 (2026-11-25) - map drawings reach the group faster
+User: partner sees the drawing play out slowly after it's finished, "as if I'm actively drawing". Not tested in game (no Lua on this PC).
+- Cause: `MapDraw.lua` send queue was BURST 4 / one msg per 1.5 s, on the wrong idea that quest sharing shares the limit (it has its own prefix, P13Q vs P13M). A line is 1-6 `S` msgs + a `T` (thickness) msg; the default brush (4) != THICKNESS (3), so nearly every line pays the `T`. A few lines queued for 10-20 s.
+- Now BURST 10 / REFILL 1.0 (usual per-prefix game limit; **not confirmed for Forever**), ticker 0.25 s. `Pump` checks the send result (`Enum.SendAddonMessageResult` throttle codes, or `false` on old clients): a refused message goes back to the front of the queue (up to 10 retries in a row) so lines never drop or reorder.
+- Next step if still slow: fold thickness into the `S` message to save one msg per line (protocol change; both players must update).
+- Also answered: items "searched" at login are the RangeBeep `RANGE_ITEMS` (RequestLoadItemDataByID so IsItemInRange works); harmless.
 
 ## v0.31.15 (2026-11-25) - gear scoring for every talent tree
 User: "for gear recommendations account for each of the talent trees instead of just one". Not tested in game (no Lua on this PC).
