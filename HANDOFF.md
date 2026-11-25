@@ -1,4 +1,10 @@
-# P13Tweaks – Handoff (2026-11-25, v0.31.16)
+# P13Tweaks – Handoff (2026-11-25, v0.31.17)
+
+## v0.31.17 (2026-11-25) - map drawings packed into fewer messages
+User asked to compress line data so it reaches the group faster. Not tested in game (no Lua on this PC); the encoder/decoder was checked with a line-for-line Python port (800 random lines round-trip exactly).
+- New `L` record replaces `S` + `T`: thickness is inside the line record (the separate `T` message was sent for nearly every line). Points after the first of each piece are steps: 2 chars (step <= 22 of 4095), 3 chars (<= 177), or `/` + 4-char full position. Same 12-bit precision. Pieces fill up to ~216 chars instead of a fixed 50 points: a typical line is 2-3 chars/point (was 4), so a long line takes ~3 messages instead of 6+1.
+- `Send` now queues and sends on the next frame; `Pump` packs queued records into one message, separated by `~` (resend to a newcomer, erase withdraw+pieces, several short lines).
+- Old `S`/`T` messages are still understood. **Older versions do not understand `L`**: both players need 0.31.17 to see each other's new lines.
 
 ## v0.31.16 (2026-11-25) - map drawings reach the group faster
 User: partner sees the drawing play out slowly after it's finished, "as if I'm actively drawing". Not tested in game (no Lua on this PC).

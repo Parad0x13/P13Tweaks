@@ -6,9 +6,15 @@
 -- P13Tweaks see it on their own map, in the sender's class colour. Lines are stored as positions on the
 -- map picture (0..1), so they stay put when you zoom or pan. Lines can fade after a few minutes (an option, off by default).
 --
--- Messages (prefix "P13M", fields split by "^"):
---   S^<mapID>^<strokeID>^<part>^<parts>^<RRGGBB>^<points>   one stroke, in pieces of <= 50 points;
---                      each point = 4 characters (two 12-bit numbers, x and y, as base-64 digits)
+-- Messages (prefix "P13M", fields split by "^"). Several short records can share one message, split by "~"
+-- (the send queue packs whatever is waiting into as few messages as possible: the game limits the NUMBER of messages).
+--   L^<mapID>^<strokeID>^<part>^<parts>^<RRGGBB>^<thickness>^<points>   one stroke (v0.31.17+), in pieces of
+--                      <= ~218 characters. The first point of each piece = 4 characters (two 12-bit numbers, x and
+--                      y, as base-64 digits); every later point is the step from the one before: 2 characters for a
+--                      small step, 3 for a medium one, or "/" + 4 characters (a full position) for a big jump.
+--   S^<mapID>^<strokeID>^<part>^<parts>^<RRGGBB>^<points>   the old stroke format (4 characters per point,
+--                      thickness in a separate T message) - still understood, no longer sent
+--   T^<strokeID>^<thickness>   (old) thickness of a stroke sent with S
 --   U^<strokeID>       the sender undid that stroke
 --   X                  the sender cleared all their lines
 --   A                  the sender cleared EVERY line (everyone's) - receivers clear all of theirs too
@@ -16,7 +22,7 @@ local ADDON_NAME, ns = ...
 
 local PREFIX = "P13M"
 local MAX_MSG = 250
-local PTS_PER_MSG = 50          -- 50 points * 4 characters + the header stays under 255 bytes
+local PTS_PER_MSG = 50          -- old S messages: 50 points * 4 characters (only used to check incoming ones)
 -- The game allows about 10 addon messages at once per prefix, then about one a second. The quest
 -- sharing has its own prefix, so drawing can use that whole allowance. If the game still says
 -- "too fast", the message goes back in the queue and we wait (see Pump).
@@ -89,14 +95,6 @@ local function Dec(s)   -- 2 characters -> 0..4095 (nil if not valid)
     if a and b then return a * 64 + b end
 end
 
-local function EncodePoints(pts, from, to)
-    local t = {}
-    for i = from, to do
-        t[#t + 1] = Enc(pts[i][1] * 4095) .. Enc(pts[i][2] * 4095)
-    end
-    return table.concat(t)
-end
-
 local function DecodePoints(s)
     if #s % 4 ~= 0 or #s > PTS_PER_MSG * 4 then return nil end
     local pts = {}
@@ -104,6 +102,84 @@ local function DecodePoints(s)
         local u, v = Dec(s:sub(i, i + 1)), Dec(s:sub(i + 2, i + 3))
         if not (u and v) then return nil end
         pts[#pts + 1] = { u / 4095, v / 4095 }
+    end
+    return pts
+end
+
+-- The newer, shorter point format (L messages): positions as whole numbers 0..4095, each point after the
+-- first of a piece written as the step from the previous point.
+--   first character 0..31  -> 2 characters: a step of up to 22 in x and y (45 x 45 combinations)
+--   first character 32..62 -> 3 characters: a step of up to 177 in x and y (355 x 355 combinations)
+--   first character 63 "/" -> followed by a full position (4 characters)
+local R2, S2 = 22, 45
+local R3, S3 = 177, 355
+local LINE_HEADER = 34                 -- room kept for "L^map^id^part^parts^RRGGBB^th^"
+local PART_BUDGET = MAX_MSG - LINE_HEADER
+local LINE_MAX_PARTS = 12              -- 300 points even if every one were a big jump (5 characters)
+
+local function Q(f) return math.max(0, math.min(4095, math.floor(f * 4095 + 0.5))) end
+local function Ch(n) return B64:sub(n + 1, n + 1) end
+
+local function EncStep(dx, dy, x, y)
+    if math.abs(dx) <= R2 and math.abs(dy) <= R2 then
+        local n = (dy + R2) * S2 + (dx + R2)              -- 0..2024
+        return Ch(math.floor(n / 64)) .. Ch(n % 64)
+    elseif math.abs(dx) <= R3 and math.abs(dy) <= R3 then
+        local n = (dy + R3) * S3 + (dx + R3)              -- 0..126024
+        return Ch(32 + math.floor(n / 4096)) .. Ch(math.floor(n / 64) % 64) .. Ch(n % 64)
+    end
+    return "/" .. Enc(x) .. Enc(y)
+end
+
+-- A whole stroke -> a list of point strings, each short enough for one message.
+local function EncodeParts(pts)
+    local parts, buf, len, px, py = {}, nil, 0, 0, 0
+    for i = 1, #pts do
+        local x, y = Q(pts[i][1]), Q(pts[i][2])
+        local piece = buf and EncStep(x - px, y - py, x, y)
+        if not buf or len + #piece > PART_BUDGET then
+            if buf then parts[#parts + 1] = table.concat(buf) end
+            buf, len = {}, 0
+            piece = Enc(x) .. Enc(y)   -- each piece starts from a full position
+        end
+        buf[#buf + 1] = piece
+        len = len + #piece
+        px, py = x, y
+    end
+    if buf then parts[#parts + 1] = table.concat(buf) end
+    return parts
+end
+
+local function DecodeSteps(s)
+    if #s < 4 or #s > MAX_MSG then return nil end
+    local x, y = Dec(s:sub(1, 2)), Dec(s:sub(3, 4))
+    if not (x and y) then return nil end
+    local pts = { { x / 4095, y / 4095 } }
+    local i = 5
+    while i <= #s do
+        local c = DEC[s:sub(i, i)]
+        if not c then return nil end
+        if c < 32 then
+            local d = DEC[s:sub(i + 1, i + 1)]
+            if not d then return nil end
+            local n = c * 64 + d
+            if n >= S2 * S2 then return nil end
+            x, y = x + n % S2 - R2, y + math.floor(n / S2) - R2
+            i = i + 2
+        elseif c < 63 then
+            local d, e = DEC[s:sub(i + 1, i + 1)], DEC[s:sub(i + 2, i + 2)]
+            if not (d and e) then return nil end
+            local n = (c - 32) * 4096 + d * 64 + e
+            if n >= S3 * S3 then return nil end
+            x, y = x + n % S3 - R3, y + math.floor(n / S3) - R3
+            i = i + 3
+        else
+            x, y = Dec(s:sub(i + 1, i + 2)), Dec(s:sub(i + 3, i + 4))
+            if not (x and y) then return nil end
+            i = i + 5
+        end
+        if x < 0 or x > 4095 or y < 0 or y > 4095 then return nil end
+        pts[#pts + 1] = { x / 4095, y / 4095 }
     end
     return pts
 end
@@ -158,6 +234,10 @@ local function Pump()
     if not ch then wipe(queue) end
     while #queue > 0 and tokens >= 1 do
         local msg = table.remove(queue, 1)
+        -- pack the records waiting behind it into the same message while they fit
+        while queue[1] and #msg + 1 + #queue[1] <= MAX_MSG do
+            msg = msg .. "~" .. table.remove(queue, 1)
+        end
         local ok, res = pcall(SendRaw, PREFIX, msg, ch)
         if ok and Throttled(res) and retries < 10 then
             table.insert(queue, 1, msg)   -- try it again on the next tick, in the same order
@@ -171,23 +251,28 @@ local function Pump()
     if #queue == 0 and ticker then ticker:Cancel(); ticker = nil end
 end
 
+-- Records are queued and sent on the next frame, so everything queued at the same moment (a resend of
+-- all my lines, an erase that withdraws lines and sends the pieces) gets packed together by Pump.
+local pumpSoon = false
 local function Send(msg)
     if not Channel() then return end
     table.insert(queue, msg)
-    Pump()
-    if #queue > 0 and not ticker then ticker = C_Timer.NewTicker(0.25, Pump) end
+    if pumpSoon then return end
+    pumpSoon = true
+    C_Timer.After(0, function()
+        pumpSoon = false
+        Pump()
+        if #queue > 0 and not ticker then ticker = C_Timer.NewTicker(0.25, Pump) end
+    end)
 end
 
 local function SendStroke(s)
     if not Channel() then return end
-    local parts = math.ceil(#s.pts / PTS_PER_MSG)
-    for part = 1, parts do
-        local from = (part - 1) * PTS_PER_MSG + 1
-        local to = math.min(#s.pts, part * PTS_PER_MSG)
-        Send(("S^%d^%d^%d^%d^%s^%s"):format(s.map, s.id, part, parts, HexColor(s.color), EncodePoints(s.pts, from, to)))
+    local parts = EncodeParts(s.pts)
+    local th = math.floor(tonumber(s.th) or THICKNESS)
+    for part, body in ipairs(parts) do
+        Send(("L^%d^%d^%d^%d^%s^%d^%s"):format(s.map, s.id, part, #parts, HexColor(s.color), th, body))
     end
-    -- thickness travels in a message of its own after the line (older versions simply ignore it)
-    if s.th and s.th ~= THICKNESS then Send(("T^%d^%d"):format(s.id, s.th)) end
 end
 
 ---------------------------------------------------------------------------
@@ -269,37 +354,53 @@ local function ShortName(sender)
     return sender
 end
 
-local function OnMessage(msg, sender)
-    if not On() then return end
-    local who = ShortName(sender)
-    if who == Me() then return end
+-- One piece of a stroke arrived (from an L or an old S message); once all pieces are in, the line is added.
+-- th = the thickness carried by an L message (nil for S: that one comes in a T message).
+local function GotPiece(who, map, id, part, parts, hex, decoded, th)
+    local key = who .. ":" .. id
+    local p = partial[key]
+    if not p or p.parts ~= parts then
+        p = { parts = parts, got = {}, map = tonumber(map), id = tonumber(id), hex = hex }
+        partial[key] = p
+    end
+    p.got[part] = decoded
+    local have = 0
+    for _ in pairs(p.got) do have = have + 1 end
+    if have < parts then return end
+    partial[key] = nil
+    local all = {}
+    for i = 1, parts do
+        for _, pt in ipairs(p.got[i]) do
+            if #all < MAX_POINTS then all[#all + 1] = pt end
+        end
+    end
+    if th then th = math.max(THICK_MIN, math.min(THICK_MAX, th)) end
+    -- a re-sent stroke replaces the old copy
+    RemoveWhere(function(s) return s.owner == who and s.id == p.id end)
+    AddStroke({ owner = who, id = p.id, map = p.map, color = ColorFromHex(p.hex), pts = all, t = GetTime(),
+        th = th or pendingTh[key] })
+    pendingTh[key] = nil
+end
+
+local function OnRecord(msg, who)
     local kind = msg:sub(1, 1)
-    if kind == "S" then
+    if kind == "L" then
+        local map, id, part, parts, hex, th, pts =
+            msg:match("^L%^(%d+)%^(%d+)%^(%d+)%^(%d+)%^(%x%x%x%x%x%x)%^(%d+)%^(.*)$")
+        if not map then return end
+        part, parts = tonumber(part), tonumber(parts)
+        if part < 1 or parts < 1 or part > parts or parts > LINE_MAX_PARTS then return end
+        local decoded = DecodeSteps(pts)
+        if not decoded then return end
+        GotPiece(who, map, id, part, parts, hex, decoded, tonumber(th))
+    elseif kind == "S" then   -- sent by versions before 0.31.17
         local map, id, part, parts, hex, pts = msg:match("^S%^(%d+)%^(%d+)%^(%d+)%^(%d+)%^(%x%x%x%x%x%x)%^(.*)$")
         if not map then return end
         part, parts = tonumber(part), tonumber(parts)
         if part < 1 or parts < 1 or part > parts or parts > math.ceil(MAX_POINTS / PTS_PER_MSG) then return end
         local decoded = DecodePoints(pts)
         if not decoded then return end
-        local key = who .. ":" .. id
-        local p = partial[key]
-        if not p or p.parts ~= parts then
-            p = { parts = parts, got = {}, map = tonumber(map), id = tonumber(id), hex = hex }
-            partial[key] = p
-        end
-        p.got[part] = decoded
-        local have = 0
-        for _ in pairs(p.got) do have = have + 1 end
-        if have == parts then
-            partial[key] = nil
-            local all = {}
-            for i = 1, parts do for _, pt in ipairs(p.got[i]) do all[#all + 1] = pt end end
-            -- a re-sent stroke replaces the old copy
-            RemoveWhere(function(s) return s.owner == who and s.id == p.id end)
-            AddStroke({ owner = who, id = p.id, map = p.map, color = ColorFromHex(p.hex), pts = all, t = GetTime(),
-                th = pendingTh[key] })
-            pendingTh[key] = nil
-        end
+        GotPiece(who, map, id, part, parts, hex, decoded, nil)
     elseif kind == "T" then
         local id, th = msg:match("^T%^(%d+)%^(%d+)$")
         id, th = tonumber(id), tonumber(th)
@@ -321,6 +422,13 @@ local function OnMessage(msg, sender)
         partial = {}
         ns:Print(who .. " cleared all the map drawings.")
     end
+end
+
+local function OnMessage(msg, sender)
+    if not On() then return end
+    local who = ShortName(sender)
+    if who == Me() then return end
+    for rec in msg:gmatch("[^~]+") do OnRecord(rec, who) end   -- one message can carry several records
 end
 
 ---------------------------------------------------------------------------
