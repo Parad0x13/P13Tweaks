@@ -1,4 +1,14 @@
-# P13Tweaks – Handoff (2026-11-25, v0.31.10)
+# P13Tweaks – Handoff (2026-11-25, v0.31.13)
+
+## v0.31.13 (2026-11-25) - pickup places for item-started dungeon quests
+User: button said 6 to pick up, Shift-click said none. Guess (not confirmed): those quests have no giver spawn points (item-started, or giver area missing from the area map); `counts.total` counts them anyway. Not tested in game.
+- New `StartPoints(stepId)` in `MapDungeonQuests.lua` (cached): `ns.QuestGiverPoints`, else for `startedBy[3]` items the spawns of the item's `npcDrops` / `objectDrops` (name "X (drops Item)", max 12). Used by both the pins (`PointsOn`) and the Shift-click cycle.
+- If still nothing to show, the chat line names the quests QuestieDB can't place. Ask the user for that line if it shows up.
+
+## v0.31.12 (2026-11-25) - Shift-click the Dungeon map button to go to each pickup place
+Not tested in game.
+- `MapDungeonQuests.lua`: Shift-left-click the Dungeon button = next pickup place, Shift-right-click = previous. `PickupStops(d)` = one stop per giver spot (uiMap + whole-number x/y) over `Entries(d)` + `ns.QuestGiverPoints`; ordered takeable first, then your current zone, then zone name, then y/x. `ShowOnMap` cancels the tile-map zoom, `SetMapID` (ring suppressed), pans + zooms to `ns.CloseViewScale` (smooth if `mapSmoothPan`). Chat line: "<short> i/n: giver - zone x, y (quest +N more)". Position resets when the dungeon changes; clamps if the list shrinks.
+- Version.lua had been left at 0.31.0; now synced with the .toc files.
 
 ## v0.31.9-0.31.10 (2026-11-25) - no teammate quest markers on the map
 User wants nothing on the map about what other party members have or did. Not tested in game.

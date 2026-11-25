@@ -5,6 +5,7 @@
 -- Deadmines). Quests you've done or already have are left out, as are ones your race / class can't take. When a quest
 -- needs earlier quests first, the pin goes on the first one of that chain you can pick up. Greyed pins: you can't take
 -- it yet (hover for why, e.g. level). Hover a pin for the quests; click it for a waypoint.
+-- Shift-click the Dungeon button: the map goes to each pickup place in turn (Shift-right-click: back).
 -- Needs QuestieDB. Giver points, prerequisites and blockers come from QuestWhere.lua.
 local ADDON_NAME, ns = ...
 
@@ -239,12 +240,56 @@ end
 -- Pins
 ---------------------------------------------------------------------------
 
+-- Where a quest is picked up: its giver's spawn points (QuestWhere.lua). A quest started by an item has none
+-- there, so then it's where that item drops (the creatures / objects that drop it), up to 12 points.
+local startCache = {}
+local function StartPoints(stepId)
+    local c = startCache[stepId]
+    if c then return c end
+    local pts = ns.QuestGiverPoints and ns.QuestGiverPoints(stepId) or {}
+    if #pts == 0 then
+        local lib = Lib()
+        local sb = lib and Get(lib.Quest, stepId, "startedBy")
+        local items = type(sb) == "table" and type(sb[3]) == "table" and sb[3] or {}
+        local areaMap = ns.LoadAreaMap and ns.LoadAreaMap() or {}
+        local out = {}
+        local function AddSpawns(db, id, label)
+            if not db or type(id) ~= "number" or #out >= 12 then return end
+            local spawns = Get(db, id, "spawns")
+            if type(spawns) ~= "table" then return end
+            local name = Get(db, id, "name")
+            for area, list in pairs(spawns) do
+                local uiMap = areaMap[area]
+                if uiMap and uiMap ~= 0 and type(list) == "table" then
+                    for _, pt in ipairs(list) do
+                        if #out < 12 and pt[1] and pt[2] and pt[1] >= 0 and pt[2] >= 0 then
+                            out[#out + 1] = { name = (name or "?") .. " (drops " .. label .. ")", uiMap = uiMap, x = pt[1], y = pt[2] }
+                        end
+                    end
+                end
+            end
+        end
+        for _, item in ipairs(items) do
+            if lib.Item and type(item) == "number" then
+                local label = Get(lib.Item, item, "name") or ("item " .. item)
+                local npcs = Get(lib.Item, item, "npcDrops")
+                if type(npcs) == "table" then for _, n in ipairs(npcs) do AddSpawns(lib.Npc, n, label) end end
+                local objs = Get(lib.Item, item, "objectDrops")
+                if type(objs) == "table" then for _, o in ipairs(objs) do AddSpawns(lib.Object, o, label) end end
+            end
+        end
+        pts = out
+    end
+    startCache[stepId] = pts
+    return pts
+end
+
 local convCache = {}
 local function PointsOn(stepId, mapID)
     local key = stepId .. ":" .. mapID
     if convCache[key] then return convCache[key] end
     local out = {}
-    local pts = ns.QuestGiverPoints and ns.QuestGiverPoints(stepId) or {}
+    local pts = StartPoints(stepId)
     for _, p in ipairs(pts) do
         local u, v
         if p.uiMap == mapID then
@@ -454,8 +499,109 @@ local function Report(d)
         #extra > 0 and (" (" .. table.concat(extra, ", ") .. ")") or ""))
 end
 
+---------------------------------------------------------------------------
+-- Shift-click the button: go to each pickup place in turn
+---------------------------------------------------------------------------
+
+local cyclePos, cycleKey = 0, nil   -- the place last shown (1..n) and which dungeon it was for
+
+-- Every pickup place for the chosen dungeon, one per giver spot: ones you can take now first, then the zone
+-- you're in, then by zone name and position (so places in the same zone come one after another).
+local function PickupStops(d)
+    local stops, seen, unplaced = {}, {}, {}
+    local here = C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
+    if here and issecretvalue and issecretvalue(here) then here = nil end
+    for _, e in ipairs((Entries(d))) do
+        local pts = StartPoints(e.stepId)
+        if #pts == 0 then unplaced[#unplaced + 1] = e.stepTitle or e.title end
+        for _, p in ipairs(pts) do
+            if p.uiMap and p.x and p.y then
+                local key = p.uiMap .. ":" .. math.floor(p.x) .. ":" .. math.floor(p.y)
+                local s = seen[key]
+                if not s then
+                    s = { point = p, entries = {}, take = false, zone = ZoneName(p.uiMap), here = (p.uiMap == here) }
+                    seen[key] = s
+                    stops[#stops + 1] = s
+                end
+                s.entries[#s.entries + 1] = e
+                if #e.reasons == 0 then s.take = true end
+            end
+        end
+    end
+    table.sort(stops, function(a, b)
+        if a.take ~= b.take then return a.take end
+        if a.here ~= b.here then return a.here end
+        if a.zone ~= b.zone then return a.zone < b.zone end
+        if a.point.y ~= b.point.y then return a.point.y < b.point.y end
+        return a.point.x < b.point.x
+    end)
+    return stops, unplaced
+end
+
+-- Switch the world map to the place's zone and centre (and zoom in) on it.
+local function ShowOnMap(p)
+    local sc = WorldMapFrame and WorldMapFrame.ScrollContainer
+    if not (sc and WorldMapFrame:IsShown()) then return end
+    if ns.CancelSheetZoom then ns.CancelSheetZoom() end   -- the tile-map zoom must not pull the view back
+    if WorldMapFrame:GetMapID() ~= p.uiMap then
+        ns.suppressMapRing = true
+        WorldMapFrame:SetMapID(p.uiMap)
+        ns.suppressMapRing = false
+    end
+    local u, v = p.x / 100, p.y / 100
+    local scale = ns.CloseViewScale and ns.CloseViewScale(p.uiMap)
+    if scale then
+        if sc.GetScaleForMinZoom then scale = math.max(scale, sc:GetScaleForMinZoom()) end
+        if sc.GetScaleForMaxZoom then scale = math.min(scale, sc:GetScaleForMaxZoom()) end
+    else
+        scale = sc:GetCanvasScale()
+    end
+    if ns:Get("mapSmoothPan") and sc.SetPanTarget and sc.SetZoomTarget then
+        sc:SetPanTarget(u, v)
+        sc:SetZoomTarget(scale)
+    else
+        sc:InstantPanAndZoom(scale, u, v, true)
+    end
+    lastSig = nil
+    Redraw(true)
+end
+
+-- step +1 (next place) or -1 (previous)
+local function CycleStops(step)
+    local d = Chosen()
+    if not d then ns:Print("Pick a dungeon first (click the Dungeon button).") return end
+    if not questsOf[d.key] then
+        ns:Print("Still working out " .. d.name .. "'s quests - try again in a moment.")
+        StartScan(UpdateButton)
+        return
+    end
+    local stops, unplaced = PickupStops(d)
+    local n = #stops
+    if n == 0 then
+        if #unplaced > 0 then
+            ns:Print(("%s: %d quest%s to pick up, but QuestieDB has no place on the map for %s: %s"):format(d.name,
+                #unplaced, #unplaced == 1 and "" or "s", #unplaced == 1 and "it" or "them", table.concat(unplaced, ", ")))
+        else
+            ns:Print(d.name .. ": no quests left to pick up.")
+        end
+        return
+    end
+    if cycleKey ~= d.key then cyclePos, cycleKey = 0, d.key end
+    if cyclePos > n then cyclePos = 0 end   -- (the list got shorter: quests were taken)
+    if cyclePos == 0 and step < 0 then cyclePos = n
+    else cyclePos = (cyclePos - 1 + step) % n + 1 end
+    local s = stops[cyclePos]
+    ShowOnMap(s.point)
+    local e = s.entries[1]
+    local what = e.stepTitle or e.title
+    if #s.entries > 1 then what = what .. (" +%d more"):format(#s.entries - 1) end
+    ns:Print(("%s %d/%d: %s - %s %.1f, %.1f (%s)%s"):format(d.short, cyclePos, n, s.point.name or "quest giver",
+        s.zone, s.point.x, s.point.y, what, s.take and "" or " |cff999999- can't take yet|r"))
+end
+
 local function Choose(key)
     ns:Set("dungeonQuestsWhich", key)
+    cyclePos, cycleKey = 0, nil
     lastSig = nil
     local d = byKey[key or ""]
     if d then
@@ -580,7 +726,7 @@ ns:RegisterOption({
     buttonText = "Pick...",
     buttonWidth = 70,
     onClick = function() if not On() then ns:Set("dungeonQuests", true); if ns.RefreshOptions then pcall(ns.RefreshOptions, ns) end end; TogglePicker(nil) end,
-    tooltip = "Pick a dungeon (Pick... here, or the Dungeon button on the world map) and a ! goes on the map at every place you pick up one of its quests (the list shows how many each dungeon has left for you) - including quests elsewhere that send you into it. If a quest needs earlier quests first, the pin is on the first one you can take. Done quests, ones in your log and ones your race or class can't take are left out; greyed pins you can't take yet (hover for why). Click a pin for a waypoint.\n\nNeeds QuestieDB.",
+    tooltip = "Pick a dungeon (Pick... here, or the Dungeon button on the world map) and a ! goes on the map at every place you pick up one of its quests (the list shows how many each dungeon has left for you) - including quests elsewhere that send you into it. If a quest needs earlier quests first, the pin is on the first one you can take. Done quests, ones in your log and ones your race or class can't take are left out; greyed pins you can't take yet (hover for why). Click a pin for a waypoint. Shift-click the Dungeon button on the map to jump to each pickup place in turn (Shift-right-click goes back).\n\nNeeds QuestieDB.",
     default = true,
     onChange = function(v)
         if not v and picker then picker:Hide() end
@@ -615,7 +761,10 @@ events:SetScript("OnEvent", function(_, event)
     button:SetFrameLevel(sc:GetFrameLevel() + 100)
     button:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     button:SetScript("OnClick", function(self, mb)
-        if mb == "RightButton" then Choose(false) else TogglePicker(self) end
+        if IsShiftKeyDown() then
+            if picker then picker:Hide() end
+            CycleStops(mb == "RightButton" and -1 or 1)
+        elseif mb == "RightButton" then Choose(false) else TogglePicker(self) end
     end)
     button:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT")
@@ -623,6 +772,7 @@ events:SetScript("OnEvent", function(_, event)
         local d = Chosen()
         GameTooltip:AddLine(d and ("Showing where to pick up " .. d.name .. " quests.") or "Pin where to pick up a dungeon's quests.", 1, 1, 1, true)
         GameTooltip:AddLine("Left-click: pick a dungeon. Right-click: remove the pins.", 0.8, 0.8, 0.8, true)
+        GameTooltip:AddLine("Shift-click: go to the next place to pick up a quest (Shift-right-click: the previous one).", 0.8, 0.8, 0.8, true)
         GameTooltip:Show()
     end)
     button:SetScript("OnLeave", function() GameTooltip:Hide() end)
