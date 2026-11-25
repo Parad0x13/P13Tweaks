@@ -2253,46 +2253,8 @@ ns:RegisterCommand("quests", "show your teammates' quests and progress", functio
     ToggleWindow()
 end)
 
--- For the map hints (MapQuestHints.lua): quests a teammate finished ("done") - and, if includeHas, quests a teammate
--- has in their log ("has") - that I haven't done and don't have. Each: { id, title, done = {names}, has = {names}, reasons = {why I can't take it} }.
-function ns.QuestHints(includeHas)
-    local byId = {}
-    local function Note(id, field, who, title)
-        if myQuests[id] or Completed(id) or ClassLocked(id) then return end
-        local h = byId[id]
-        if not h then h = { id = id, done = {}, has = {} }; byId[id] = h end
-        h[field][#h[field] + 1] = who
-        if title and not h.title then h.title = title end
-    end
-    -- finished quests: only the ones I could reasonably do now (a teammate's whole history can be thousands long)
-    local cand = {}
-    for _, c in ipairs(DoneCandidates()) do cand[c.id] = true end
-    for key, m in pairs(members) do
-        if not m.demo then
-            for id in pairs(m.done or {}) do
-                if cand[id] or (type(seen[id]) == "string") then Note(id, "done", key) end
-            end
-            if includeHas then
-                for id, q in pairs(m.quests) do Note(id, "has", key, q.title) end
-            end
-        end
-    end
-    -- quests I have in my log that a teammate already finished: marked at the turn-in, so I can see on the map
-    -- which of my quests someone has already done
-    for id, q in pairs(myQuests) do
-        local who = FinishedBy(id)
-        -- ready = I've finished its objectives: the marker then goes to the hand-in instead of the work area
-        if who then byId[id] = { id = id, done = who, has = {}, mine = true, ready = (q.state == 1), title = q.title } end
-    end
-    local list = {}
-    for id, h in pairs(byId) do
-        h.title = h.title or (type(seen[id]) == "string" and seen[id]) or (ns.QuestName and ns.QuestName(id)) or ("Quest " .. id)
-        h.reasons = (not h.mine and ns.WhyCantTake and ns.WhyCantTake(id)) or {}
-        list[#list + 1] = h
-    end
-    table.sort(list, function(a, b) return a.id < b.id end)
-    return list
-end
+-- (The world-map markers for teammates' quests, MapQuestHints.lua, were removed in 0.31.10: nothing about what
+-- other people have or did is drawn on the map any more.)
 
 ns:RegisterCommand("sync", "ask your group to resend their quests right now (syncing is automatic; this is a fallback)", function()
     if not Sharing() then ns:Print("Quest sharing is off - turn it on in /p13."); return end

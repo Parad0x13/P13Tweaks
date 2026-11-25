@@ -1,4 +1,12 @@
-# P13Tweaks – Handoff (2026-11-24, v0.31.8)
+# P13Tweaks – Handoff (2026-11-25, v0.31.10)
+
+## v0.31.9-0.31.10 (2026-11-25) - no teammate quest markers on the map
+User wants nothing on the map about what other party members have or did. Not tested in game.
+- 0.31.9: dropped the gold "?" (my quest that a teammate finished) from `ns.QuestHints`.
+- 0.31.10: user still saw a "?", so the whole feature is gone: `Features/MapQuestHints.lua` deleted (both .toc files), `ns.QuestHints` removed from `QuestShare.lua`, "Teammates' quests" section removed from `Options.lua` (options `mapQuestHints` / `mapQuestHintsHas` no longer exist; old saved values are just ignored). **File removed: full game restart, not just /reload.**
+- The teammates' quests window, tooltips and sharing in `QuestShare.lua` are untouched. `QuestWhere.lua` comments still mention MapQuestHints (stale, harmless).
+- Open: if a "?" still shows, likely candidates are `MapSheetQuests.lua` (my own ready quests, gold "?" at the hand-in on the tile map), Questie, or the old file still cached before a restart. Ask the user for the tooltip.
+- Discussed (not built): an Auction House "find upgrades" search reusing CharProgress `Score`/`Weights`/`SLOTS_OF` (move them to a shared GearScore.lua), per-slot queries filtered by armor type + level + usable, scored and ranked by gain / gain per gold, TSM prices optional. First step: `/dump QueryAuctionItems` and `/dump C_AuctionHouse` at the AH to see which API Forever has.
 
 ## v0.31.1-0.31.8 (2026-11-24) - window fit, Forever talents, gear tooltips
 None of this tested in game yet (no Lua on this PC, no syntax check run). User reloaded into 0.31.8 at the end.

@@ -20,7 +20,6 @@ local LAYOUT = {
         { "Look", { "mapSheetQuests", "mapSheetQuestsNative", "mapTerrain", "mapTerrainDungeons", "mapTerrainLabels", "mapTerrainBlackSea", "mapTerrainButton", "mapCaveView", "mapFrameDrag", "mapBorderHide", "mapFullWidth" } },
         { "Travel", { "mapRoute", "flightPoints", "flightPointsTaxi" } },
         { "Drawing", { "mapDraw", "mapDrawErase", "mapDrawKeep", "mapDrawMinimap", "mapDrawPicker", "mapDrawFade", "mapDrawDebug" } },
-        { "Teammates' quests", { "mapQuestHints", "mapQuestHintsHas" } },
         { "Dungeon quests", { "dungeonQuests" } },
     } },
     { name = "Combat", icon = "Interface\\Icons\\Ability_DualWield", sections = {
