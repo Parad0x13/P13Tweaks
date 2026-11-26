@@ -52,9 +52,13 @@ end
 -- Eastern Kingdoms continent or zone map we have tiles for, or the game's map of one of the
 -- open-air dungeons/raids in ns.TerrainDungeons (option mapTerrainDungeons).
 local MAP_TYPE_DUNGEON = Enum and Enum.UIMapType and Enum.UIMapType.Dungeon or 4
+-- Cities that lie UNDER the ground: the terrain tiles are a view from above, so on their own map they show
+-- only the surface (Undercity = the Ruins of Lordaeron). These keep the game's painted map of the city.
+local UNDERGROUND_CITY = { [1458] = true }   -- Undercity
 local function Bounds(mapID)
     if boundsCache[mapID] ~= nil then return boundsCache[mapID] end
     local result = false
+    if UNDERGROUND_CITY[mapID] then boundsCache[mapID] = false; return false end
     local info = C_Map.GetMapInfo and C_Map.GetMapInfo(mapID)
     local dungeon = info and info.mapType == MAP_TYPE_DUNGEON
     if info and (info.mapType == MAP_TYPE_CONTINENT or info.mapType == MAP_TYPE_ZONE or dungeon)

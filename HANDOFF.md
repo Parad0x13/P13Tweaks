@@ -1,4 +1,10 @@
-# P13Tweaks – Handoff (2026-11-25, v0.31.17)
+# P13Tweaks – Handoff (2026-11-26, v0.31.18)
+
+## v0.31.18 (2026-11-26) - Undercity keeps the game's city map
+User: in Undercity the custom (terrain) map shows no city. Cause: terrain tiles are a top-down view, so on Undercity's map (uiMap 1458, id confirmed from Questie's QuestieMapUtils.lua) they showed only the surface ruins and hid the painted city. Not tested in game.
+- `MapTerrain.lua` `Bounds()`: new `UNDERGROUND_CITY = { [1458] = true }` -> no terrain there, painted map shown, Terrain/Painted button hidden. Ironforge (1455) probably has the same problem; add it if the user reports it.
+- `Version.lua` was still 0.31.16; now synced with the .tocs at 0.31.18.
+- **Open idea (user asked, no answer yet)**: use the minimap's own textures for the city. Option 1 = existing Cave view (should already be offered in Undercity since it's indoors and uiMap type Zone; unconfirmed). Option 2 = full pannable city map from the client's WMO minimap tiles: `WMOMinimapTexture.db2` (GroupNum, BlockX/Y, FileDataID, WMOID) + Undercity WMO root (MOGI group bounds) + its placement (MODF in the Tirisfal ADT obj files), read with `tools/gen_terrain_data.py`'s CASC reader. Hard part: stacked levels (canals / upper ring / inner city overlap).
 
 ## v0.31.17 (2026-11-25) - map drawings packed into fewer messages
 User asked to compress line data so it reaches the group faster. Not tested in game (no Lua on this PC); the encoder/decoder was checked with a line-for-line Python port (800 random lines round-trip exactly).
