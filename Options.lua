@@ -14,6 +14,9 @@ local LAYOUT = {
     { name = "Character Progression", icon = "Interface\\Icons\\Achievement_Level_10", page = "charProgress", sections = {
         { "Reminders", { "charProgressNotify", "charProgressTooltip", "charProgressStatTags" } },
     } },
+    { name = "Progression", icon = "Interface\\Icons\\INV_Misc_PocketWatch_01", page = "levelLog", sections = {
+        { "Level log", { "levelLog" } },
+    } },
     { name = "Map", icon = "Interface\\Icons\\INV_Misc_Map_01", sections = {
         { "Zooming", { "mapSheetZoom", "mapSheet", "mapSheetFull", "mapSeamless", "mapExtraZoomIn", "mapRemember" } },
         { "Finding yourself", { "mapPlayerCircle", "mapMiddleClick", "mapSmoothPan", "mapPartyCycle" } },

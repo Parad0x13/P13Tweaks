@@ -1,4 +1,11 @@
-# P13Tweaks – Handoff (2026-11-26, v0.31.18)
+# P13Tweaks – Handoff (2026-11-26, v0.31.20)
+
+## v0.31.19-20 (2026-11-26) - Progression tab: when each level was reached
+User asked to track level-ups across their characters, in a new "Progression" tab, each level listed as epoch and as local time. Not tested in game (no Lua on this PC).
+- New `Features/LevelLog.lua` (in both .tocs after CharProgress.lua). Account-wide `P13TweaksDB.levelLogData["Name-Realm"] = { class, levels = { [lvl] = { t = time(), seen = true|nil } } }`. `PLAYER_LEVEL_UP` (arg1 = new level) saves the exact time; `PLAYER_LOGIN` saves the current level with `seen = true` ("first seen": the real time is unknown), shown in grey. The first time recorded for a level is never overwritten.
+- Page `ns.customPages.levelLog`: current character first (class colour), then the others A-Z; columns Level / Epoch / Local time (`date("%Y-%m-%d %H:%M:%S", t)` = the PC's local time). Option `levelLog` (toggle, default on) in LAYOUT tab "Progression" > "Level log" (sidebar slot 2, under Character Progression). Command `/p13 levels` opens the tab.
+- v0.31.20 fix: the data was first saved under `levelLog`, the same key as the option (boolean) -> "attempt to index local 'log' (a boolean value)". Data moved to `levelLogData`; `Log()` resets it if it isn't a table. **Lesson: option keys and data keys share P13TweaksDB; never reuse a key.**
+- Possible later additions (not asked): /played time per level (`TIME_PLAYED_MSG`), removing a deleted character from the list.
 
 ## v0.31.18 (2026-11-26) - Undercity keeps the game's city map
 User: in Undercity the custom (terrain) map shows no city. Cause: terrain tiles are a top-down view, so on Undercity's map (uiMap 1458, id confirmed from Questie's QuestieMapUtils.lua) they showed only the surface ruins and hid the painted city. Not tested in game.
