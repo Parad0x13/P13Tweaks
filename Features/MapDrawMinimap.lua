@@ -14,6 +14,7 @@ local SIZE = {
     outdoor = { [0] = 466 + 2 / 3, 400, 333 + 1 / 3, 266 + 2 / 3, 200, 133 + 1 / 3 },
     indoor  = { [0] = 300, 240, 180, 120, 80, 50 },
 }
+ns.MINIMAP_YARDS = SIZE   -- (also used by FarmHeat.lua)
 
 local layer, pool, used = nil, {}, 0
 local dots, dotsUsed = {}, 0   -- round dots at the joints of thick lines (like on the world map)
@@ -37,6 +38,7 @@ local function DetectIndoors()
     end
     local outdoorZoom = tonumber(GetCVar("minimapZoom"))
     indoors = outdoorZoom ~= nil and outdoorZoom ~= Minimap:GetZoom()
+    ns.minimapIndoors = indoors   -- (also used by FarmHeat.lua)
     Minimap:SetZoom(zoom)
     checking = false
     lastSig = nil

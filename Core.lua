@@ -81,6 +81,7 @@ events:SetScript("OnEvent", function(self, event, arg1)
         P13TweaksDB.mapTerrainTrim, P13TweaksDB.hiddenTiles, P13TweaksDB.mapDebugTiles = nil, nil, nil  -- removed tile heuristics (data now comes from the client)
         P13TweaksDB.mapRegions = nil
         P13TweaksDB.mapQuestMax = nil  -- removed: quest log on the maximized map
+        P13TweaksDB.farmHeatNpc = nil  -- replaced by farmHeatSel (0.31.25)
         P13TweaksDB.mapTerrainSeeThrough = nil  -- removed see-through tiles (the tile pictures have no transparency)
         -- One-time: show EVERY terrain tile exactly as the client draws it, so the new tile data can be checked
         -- (nothing see-through, blue sea behind so tile edges show, full opacity). Each can be switched back in
@@ -106,6 +107,26 @@ events:SetScript("OnEvent", function(self, event, arg1)
         self:UnregisterEvent("ADDON_LOADED")
     end
 end)
+
+-- When the game blocks one of our actions ("P13Tweaks has been blocked from an action only available to the
+-- Blizzard UI"), say which function it was and keep the last few in P13TweaksDB.blockedLog (with the call
+-- stack), so it can be read from the SavedVariables file afterwards.
+do
+    local ev = CreateFrame("Frame")
+    ev:RegisterEvent("ADDON_ACTION_BLOCKED")
+    ev:RegisterEvent("ADDON_ACTION_FORBIDDEN")
+    ev:SetScript("OnEvent", function(_, event, addon, func)
+        if addon ~= ADDON_NAME then return end
+        local entry = { when = date("%Y-%m-%d %H:%M:%S"), event = event, func = tostring(func),
+            version = ns.version, stack = debugstack and debugstack(2) or nil }
+        if P13TweaksDB then
+            P13TweaksDB.blockedLog = P13TweaksDB.blockedLog or {}
+            table.insert(P13TweaksDB.blockedLog, entry)
+            while #P13TweaksDB.blockedLog > 10 do table.remove(P13TweaksDB.blockedLog, 1) end
+        end
+        ns:Print("|cffff5555the game blocked|r " .. entry.func .. " (" .. event .. "). Saved for diagnosis - please mention it.")
+    end)
+end
 
 -- Small buttons in a row along the bottom-left of the world map picture. Features add theirs
 -- with ns:AddMapButton(button, order); shown ones are laid out left to right by `order`.

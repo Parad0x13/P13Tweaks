@@ -17,6 +17,9 @@ local LAYOUT = {
     { name = "Progression", icon = "Interface\\Icons\\INV_Misc_PocketWatch_01", page = "levelLog", sections = {
         { "Level log", { "levelLog" } },
     } },
+    { name = "Farming", icon = "Interface\\Icons\\INV_Misc_Coin_02", page = "farmLog", sections = {
+        { "Farming tracker", { "farmSession", "farmHeatMap", "farmHeatMinimap" } },
+    } },
     { name = "Map", icon = "Interface\\Icons\\INV_Misc_Map_01", sections = {
         { "Zooming", { "mapSheetZoom", "mapSheet", "mapSheetFull", "mapSeamless", "mapExtraZoomIn", "mapRemember" } },
         { "Finding yourself", { "mapPlayerCircle", "mapMiddleClick", "mapSmoothPan", "mapPartyCycle" } },

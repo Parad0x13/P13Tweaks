@@ -1,4 +1,41 @@
-# P13Tweaks – Handoff (2026-11-26, v0.31.20)
+# P13Tweaks – Handoff (2026-11-27, v0.31.26)
+
+## v0.31.26 (2026-11-27) - farming tracker window collapses
+User asked for the tracker window to be collapsible. Not tested in game.
+- `FarmSession.lua`: -/+ button (UI-MinusButton / UI-PlusButton textures) in the title bar left of the X; `P13TweaksDB.farmSessionCollapsed`. Everything but the status line now lives in a `body` frame that's hidden when collapsed; collapsed = 52 px tall, status line also shows gold/hour (auction, else vendor).
+- Window is now anchored/saved by TOPLEFT (drag stop saves `{ "TOPLEFT", "BOTTOMLEFT", left, top }`; an older CENTER position is converted after the first layout), so collapsing keeps the title bar in place.
+
+## v0.31.25 (2026-11-27) - Farming tab: a record of farming expeditions
+User: move farming out of Combat into its own tab; record each farming "expedition" and list them, to show where it's worth going back to farm gold. Not tested in game.
+- `Options.lua` LAYOUT: new tab "Farming" (3rd, icon INV_Misc_Coin_02, page `farmLog`), section "Farming tracker" = farmSession, farmHeatMap, farmHeatMinimap (removed from Combat).
+- `FarmSession.lua`: window's Reset -> **Finish** (saves, no Shift needed) + **Expeditions** button (opens the tab). `Finish()` appends to `P13TweaksDB.farmHistory` `{ id (P13TweaksDB.farmNextId), started, ended, elapsed, kills, items, coin, vendor, ah, noAH, priceSource, zone (most kills), zones, mobs = ranking (npc,name,kills,vendor,ah,perKill), spots[npc], loot (top 10 by value) }` - prices frozen at Finish - then clears the run (stopped). Empty runs aren't saved. `/p13 farm reset` still discards; new `/p13 farm finish`, `/p13 farm log`. Per-kill zone from `GetZoneText()` into `d.zones`. `d.started` set on first Start.
+- Heat selection is now `P13TweaksDB.farmHeatSel = { exp = id|nil(current run), npc = npc|nil(all mobs) }` via `ns.FarmHeatIs/ns.FarmHeatToggle` (FarmSession); old `farmHeatNpc` cleared in Core. Finishing while the current run's heatmap is shown re-points it to the saved expedition. `FarmHeat.lua` `Spots()` returns a list of spot lists.
+- New `Features/FarmLog.lua` (both .tocs, after FarmHeat.lua): page "Best zones" (sum ah / sum time per main zone, all expeditions) and "Expeditions" (run in progress first, then sorted by auction gold/hour or newest - `P13TweaksDB.farmLogSort`); each: zone/date, Map (all its kills as heatmap) / Shift-click Delete, time, kills, auction/hr (total), vendor/hr, best 3 mobs per kill, other zones. Refreshes every 3 s while a run is recording. `loot` is saved but not shown yet.
+- Possible later: a note/name per expedition, showing the saved loot list, opening the map to the zone (avoided: taint risk).
+
+## v0.31.24 (2026-11-27) - fix "P13Tweaks has been blocked from an action only available to the Blizzard UI"
+User got that popup after v0.31.23. No taint.log / BugGrabber on the PC, so the function name is unconfirmed, but the only new thing that can trigger it was `FarmSession.lua` registering **`COMBAT_LOG_EVENT_UNFILTERED`** (for mob names) - the first CLEU use in the addon; this client has Midnight-style secret values, where addons may not register CLEU. **Lesson: never register COMBAT_LOG_EVENT_UNFILTERED.**
+- Removed CLEU. Mob names now come from `PLAYER_TARGET_CHANGED` / `UPDATE_MOUSEOVER_UNIT` (while recording) plus target/mouseover at loot time; secret GUIDs/names are skipped (also a secret loot-source GUID in `MobSource`).
+- `Core.lua`: catches `ADDON_ACTION_BLOCKED` / `ADDON_ACTION_FORBIDDEN` for P13Tweaks: prints the function and keeps the last 10 in `P13TweaksDB.blockedLog` (time, event, func, version, debugstack). Read it from `_forever_\WTF\Account\<acct>\SavedVariables\P13Tweaks.lua` if it happens again.
+
+## v0.31.23 (2026-11-27) - Kill heatmap for a farmed mob (world map + minimap)
+User asked to record where each kill happens and click a mob in the list to see a heatmap on the map and minimap. Not tested in game.
+- `FarmSession.lua` `CountMob`: on a new kill, saves `UnitPosition("player")` (you're in loot range of the corpse) as `{ instanceID, X, Y }` (whole yards) in `mobTypes[npc].spots`, max 1000 per mob (oldest dropped). Kills from before this version have no spots. The 5 "Best mobs" lines are now Buttons: click = `P13TweaksDB.farmHeatNpc` = that npc (click again = off; highlighted green when shown). `/p13 farm heat off` clears it.
+- New `Features/FarmHeat.lua` (both .tocs, after FarmSession.lua): kills grouped into 30-yd cells (avg position), each drawn as `Media/Blob.tga` (new, from `tools/make_blob.py`: white soft spot, tinted by SetVertexColor) 80 yd across, yellow->red and more opaque by kill count / max. World map: layer in `sc.Child` (zooms with the map), frame level +18, `C_Map.GetMapPosFromWorldPos(inst, vec, mapID)` cached per bin per map, min 12 screen px; redraw by SigSame + `ns.AddMapLayerRefresh`. Minimap: projected like MapDrawMinimap (reuses newly exported `ns.MINIMAP_YARDS` / `ns.minimapIndoors`), spots near the round edge shrink to stay inside. Options `farmHeatMap`, `farmHeatMinimap` (default on), in Combat > Farming.
+- Not drawn on the separate tilesheet map window (MapSheet.lua); add there if asked.
+
+## v0.31.22 (2026-11-27) - Farming tracker lists the most profitable mobs
+User asked for the most profitable mobs to be listed. Not tested in game.
+- `FarmSession.lua`: `farmSessionData.mobTypes[npcID] = { name, kills, coin, items[itemID]=count }` (npcID = 6th part of the Creature GUID). Kill counted once per GUID at loot snapshot; items credited to their slot's source GUID; coin credited to the first mob in the loot window (`coinMob`) - rough with AoE loot.
+- Names: target/mouseover GUID match while looting, else a GUID->name cache from CLEU `UNIT_DIED`/`PARTY_KILL` (only while running, capped 500); fallback "NPC <id>". A missing name fills in on the next loot from that mob type.
+- Window (now 360 wide, height grows): "Best mobs" = top 5 by average value per kill (auction value with vendor fallback if TSM/Auctionator, else vendor), with kill count and total. `/p13 farm mobs` prints the full ranking. Few kills = noisy average (one lucky green tops the list); kill count is shown so that's visible.
+
+## v0.31.21 (2026-11-27) - Farming tracker (vendor vs auction estimate)
+User asked for a start/stop recorder of every item looted from mobs, with a rough estimate of what farming it is worth sold to a vendor vs at the AH's average sale price. Not tested in game (no Lua on this PC).
+- New `Features/FarmSession.lua` (in both .tocs after FishSession.lua). Option `farmSession` (toggleButton, default off) = window shown; in LAYOUT Combat > "Farming". Window: Start/Stop(/Resume), Shift-click Reset, hover = item list sorted by auction value. `/p13 farm [start|stop|reset|show|hide|debug]`.
+- Saved in `P13TweaksDB.farmSessionData` (running, elapsed, items[itemID]={link,count}, coin, mobs) - survives /reload. Elapsed is ticked +1 s by a C_Timer ticker only while running and logged in, so time logged out doesn't count.
+- Loot counts only when `GetLootSourceInfo(slot)` GUID is `Creature-`/`Vehicle-` (skinning counts; fishing, herbs/ore, chests, bag items don't). Items counted at `LOOT_SLOT_CLEARED` from a LOOT_READY/LOOT_OPENED snapshot (same approach as FishSession). Coin = positive `PLAYER_MONEY` deltas while a mob's loot window is open (+0.5 s after close for auto-loot).
+- Vendor = sell price (GetItemInfo #11) x count + coin. Auction = TSM `DBRegionSaleAvg`, else Auctionator `GetAuctionPriceByItemLink`; items with no AH price fall back to vendor price (marked `*`); + coin. Per hour shown after 60 s.
 
 ## v0.31.19-20 (2026-11-26) - Progression tab: when each level was reached
 User asked to track level-ups across their characters, in a new "Progression" tab, each level listed as epoch and as local time. Not tested in game (no Lua on this PC).
