@@ -1,4 +1,13 @@
-# P13Tweaks – Handoff (2026-11-27, v0.31.30)
+# P13Tweaks – Handoff (2026-11-28, v0.31.36)
+
+## v0.31.31-36 (2026-11-28) - quest items marked in bags (works in Bagnon). TESTED IN GAME: works.
+User asked for a small, unobtrusive icon on quest items in the bags, toggleable in /p13.
+- New `Features/BagQuestIcon.lua` (both .tocs, after BagMiddleSort.lua). Option `bagQuestIcon` (default on), Towns tab -> Bags section. Draws a 14 px `Interface\GossipFrame\AvailableQuestIcon` ("!") at the slot's TOPLEFT (-2, 2), OVERLAY sublevel 7.
+- Quest test: `C_Container.GetContainerItemQuestInfo` (isQuestItem / questID), else item class 12 (`Enum.ItemClass.Questitem`) via GetItemInfoInstant (catches quest drops the game doesn't flag).
+- **The user uses Bagnon.** Its addon table is `_G.Bagnon` on Forever (NOT `_G.BagBrother`, even though the code lives in the BagBrother folder; frames are named `BagnonContainerItemN`). Hooked with `hooksecurefunc(Bagnon.Item, "UpdateBorder", ...)` - Poncho classes look methods up through the `__index` chain, so ContainerItem buttons get the hook. Uses the button's own `GetQuestInfo()` plus the class check. Tries `Bagnon`, `BagBrother`, `Combuctor`, `Bagnonium` on every ADDON_LOADED until hooked.
+- Default bags: walks ContainerFrame1-13 / ContainerFrameCombinedBags / BackpackFrame children (depth 4) + `EnumerateValidItems`. **On Forever, `EnumerateValidItems` yields the button as the FIRST value** (the `for _, b in` form gives nil). `BagMiddleSort.lua` HookFrame has the same bug (its slot hook gets nil; it still works via the GLOBAL_MOUSE_UP fallback) - not fixed yet.
+- `/p13 bagquest`: diagnostics (hover a slot first), also saved to `P13TweaksDB.bagQuestDebug`; user /reloads and Claude reads WTF\...\SavedVariables\P13Tweaks.lua. The user can't copy chat, so every future diagnostic must save this way.
+- Version.lua had fallen behind (0.31.26 while the .tocs said 0.31.30); all three files are now 0.31.36.
 
 ## v0.31.27-30 (2026-11-27) - farming tracker window trimmed, expands upwards, header click toggles
 User requests, one per version. Not tested in game.
