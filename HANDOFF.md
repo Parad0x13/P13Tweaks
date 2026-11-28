@@ -1,4 +1,11 @@
-# P13Tweaks – Handoff (2026-11-27, v0.31.26)
+# P13Tweaks – Handoff (2026-11-27, v0.31.30)
+
+## v0.31.27-30 (2026-11-27) - farming tracker window trimmed, expands upwards, header click toggles
+User requests, one per version. Not tested in game.
+- v0.31.27: removed the window's hover tooltip (item list with V/A prices) and `TOOLTIP_MAX`; help text no longer says "Hover the window". The -/+, Finish and mob-line tooltips stay.
+- v0.31.28: removed the **Expeditions** button (user saw no point). `/p13 farm log` and the Farming tab still exist.
+- v0.31.29: window is now anchored/saved by **BOTTOMLEFT** (`farmSessionPos = { "BOTTOMLEFT", "BOTTOMLEFT", left, bottom }`), so expanding and the growing mob list push the title bar up. Older TOPLEFT/CENTER saves are converted one frame after the first layout (no visible jump). Replaces the v0.31.26 TOPLEFT note below.
+- v0.31.30: a plain left-click on the title bar (top 24 px, cursor y vs `GetTop()` / effective scale) toggles `farmSessionCollapsed`; `self.dragged` (set in OnDragStart, cleared OnMouseDown) stops a drag from toggling.
 
 ## v0.31.26 (2026-11-27) - farming tracker window collapses
 User asked for the tracker window to be collapsible. Not tested in game.

@@ -16,7 +16,6 @@ local ADDON_NAME, ns = ...
 
 local TSM_SOURCE = "DBRegionSaleAvg"
 local PRICE_REFRESH = 5      -- seconds between price look-ups while the window is open
-local TOOLTIP_MAX = 25       -- items listed when hovering the window
 
 ---------------------------------------------------------------------------
 -- Saved session: P13TweaksDB.farmSessionData
@@ -365,24 +364,39 @@ BuildWindow = function()
     win:EnableMouse(true)
     win:SetClampedToScreen(true)
     win:RegisterForDrag("LeftButton")
-    win:SetScript("OnDragStart", win.StartMoving)
-    -- (saved by the top-left corner, so collapsing / growing keeps the title bar where it is)
+    win:SetScript("OnDragStart", function(self) self.dragged = true; self:StartMoving() end)
+    -- a plain click (not a drag) on the title bar collapses / expands, like the -/+ button
+    win:SetScript("OnMouseDown", function(self) self.dragged = nil end)
+    win:SetScript("OnMouseUp", function(self, button)
+        if button ~= "LeftButton" or self.dragged then return end
+        local top = self:GetTop()
+        local _, y = GetCursorPosition()
+        y = y / self:GetEffectiveScale()
+        if top and y <= top and y >= top - 24 then
+            P13TweaksDB.farmSessionCollapsed = not P13TweaksDB.farmSessionCollapsed or nil
+            Update()
+        end
+    end)
+    -- (saved by the bottom-left corner, so expanding / growing pushes the title bar up and the bottom stays put)
     win:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
-        local l, t = self:GetLeft(), self:GetTop()
-        if l and t then
-            P13TweaksDB.farmSessionPos = { "TOPLEFT", "BOTTOMLEFT", l, t }
+        local l, b = self:GetLeft(), self:GetBottom()
+        if l and b then
+            P13TweaksDB.farmSessionPos = { "BOTTOMLEFT", "BOTTOMLEFT", l, b }
             self:ClearAllPoints()
-            self:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", l, t)
+            self:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", l, b)
         end
     end)
     local p = P13TweaksDB.farmSessionPos
     if p then win:SetPoint(p[1], UIParent, p[2], p[3], p[4]) else win:SetPoint("CENTER", UIParent, "CENTER", 0, 200) end
-    if not p or p[1] ~= "TOPLEFT" then
-        -- (re-anchor by the top-left corner once laid out, same as after a drag)
+    if not p or p[1] ~= "BOTTOMLEFT" then
+        -- (older saves / first show: re-anchor by the bottom-left corner once laid out, same as after a drag)
         C_Timer.After(0, function()
-            local l, t = win:GetLeft(), win:GetTop()
-            if l and t then win:ClearAllPoints(); win:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", l, t) end
+            local l, b = win:GetLeft(), win:GetBottom()
+            if l and b then
+                P13TweaksDB.farmSessionPos = { "BOTTOMLEFT", "BOTTOMLEFT", l, b }
+                win:ClearAllPoints(); win:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", l, b)
+            end
         end)
     end
 
@@ -472,46 +486,6 @@ BuildWindow = function()
         GameTooltip:Show()
     end)
     finishBtn:SetScript("OnLeave", GameTooltip_Hide)
-
-    local logBtn = CreateFrame("Button", nil, body, "UIPanelButtonTemplate")
-    logBtn:SetSize(90, 20)
-    logBtn:SetPoint("LEFT", finishBtn, "RIGHT", 6, 0)
-    logBtn:SetText("Expeditions")
-    logBtn:SetScript("OnClick", function() ns.commands.farm.func("log") end)
-
-    win:SetScript("OnEnter", function(self)
-        local d = Data()
-        GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-        GameTooltip:AddLine("Looted from mobs")
-        -- most valuable first
-        local list = {}
-        for id, it in pairs(d.items) do
-            local pr = priced[id] or Price(id, it.link)
-            local v = (pr.vendor or 0) * it.count
-            table.insert(list, { it = it, p = pr, v = v, a = pr.ah and pr.ah * it.count or v })
-        end
-        table.sort(list, function(a, b) return a.a > b.a end)
-        if #list == 0 then GameTooltip:AddLine("nothing yet", 0.6, 0.6, 0.6) end
-        for i, e in ipairs(list) do
-            if i > TOOLTIP_MAX then
-                GameTooltip:AddLine(("...and %d more"):format(#list - TOOLTIP_MAX), 0.6, 0.6, 0.6)
-                break
-            end
-            local right = "|cff999999V|r " .. (e.p.vendor and Coins(e.v) or "|cff999999?|r")
-            if AHName() then
-                right = right .. "  |cff999999A|r " .. (e.p.ah and Coins(e.a) or "|cff999999-|r")
-            end
-            GameTooltip:AddDoubleLine(e.it.count .. "x " .. e.it.link, right, 1, 1, 1, 1, 1, 1)
-        end
-        GameTooltip:AddLine(" ")
-        GameTooltip:AddLine("V = vendor price, A = auction price"
-            .. (AHName() and (" (" .. AHName() .. ")") or "") .. ", for the whole stack. "
-            .. "* items with no auction price count at their vendor price in the Auction estimate. "
-            .. "Both estimates include the coin looted. Rough numbers: auction prices assume it all sells.",
-            0.6, 0.6, 0.6, true)
-        GameTooltip:Show()
-    end)
-    win:SetScript("OnLeave", GameTooltip_Hide)
 
     -- the X hides the window (the option); recording carries on if it's running
     win:SetScript("OnHide", function()
@@ -753,7 +727,7 @@ ns:RegisterOption({
     label = "Farming tracker window",
     buttonText = "Start",
     onClick = function() Start() end,
-    tooltip = "A small window with Start / Stop / Reset. While it's recording, every item you loot from a mob (and the coin they drop) is counted, with two rough estimates of what it's worth, in total and per hour: selling it all to a vendor, or selling it at the auction house's average sale price (needs TradeSkillMaster or Auctionator; items with no auction price count at vendor price). The window also lists the most profitable kinds of mob, by average value per kill (/p13 farm mobs lists them all). Hover the window for the item list. Closing the window doesn't stop the recording. Also /p13 farm start, stop, reset.",
+    tooltip = "A small window with Start / Stop / Reset. While it's recording, every item you loot from a mob (and the coin they drop) is counted, with two rough estimates of what it's worth, in total and per hour: selling it all to a vendor, or selling it at the auction house's average sale price (needs TradeSkillMaster or Auctionator; items with no auction price count at vendor price). The window also lists the most profitable kinds of mob, by average value per kill (/p13 farm mobs lists them all). Closing the window doesn't stop the recording. Also /p13 farm start, stop, reset.",
     default = false,
     onChange = function(v)
         if v then ShowWindow() elseif win and win:IsShown() then win:Hide() end
