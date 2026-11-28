@@ -1,4 +1,19 @@
-# P13Tweaks – Handoff (2026-11-28, v0.31.36)
+# P13Tweaks – Handoff (2026-11-28, v0.31.39)
+
+## v0.31.39 (2026-11-28) - first Done in square picking did nothing (user report). Dinging TESTED IN GAME: works.
+- `slotReadyLog` in the user's WTF showed MultiBarBottomLeftButton6 "done after 6.00 s -> DING" x4 (Arcane Shot), so the cooldown-animation approach works on Forever, in and out of combat as far as seen.
+- Bug: `MakeBanner` set OnHide, then called `f:Hide()` on the freshly shown frame -> StopPicking ran during the first StartPicking (picking already true), so the real Done found `picking == false` and left the overlays up. Fix: Hide before SetScript("OnHide"); Done calls StopPicking directly; StopPicking always hides overlays.
+
+## v0.31.38 (2026-11-28) - marked-square dot moved to the top-left corner (user request).
+
+## v0.31.37 (2026-11-28) - marked action bar squares ding when ready. NOT tested in game.
+User asked to pick specific action bar squares that play a sound when whatever is on them goes from not ready to ready.
+- New `Features/SlotReady.lua` (both .tocs, after SpellReady.lua; **new file = full game restart, not just /reload**). Options `slotReady` (toggleButton "Pick", default on) and `slotReadyMarks` (green Blob.tga dot top-right of marked squares, default on), Combat > Spells. `/p13 squares` = pick mode, `/p13 squares clear`, `/p13 squares debug` (saves `P13TweaksDB.slotReadyDebug`: found buttons, marked + state, hooked, last 40 log lines from `P13TweaksDB.slotReadyLog`).
+- Squares saved per character: `P13TweaksDB.slotReadySquares["Name-Realm"][buttonName] = true`. Buttons: ActionButton, MultiBarBottomLeft/BottomRight/Right/Left, MultiBar5-7 (1-12), PetActionButton1-10. No bar addon installed on the user's PC.
+- **Forever uses the Mainline (retail) action bars.** Read from the client with the new name-hash CASC reader (scratchpad `casc_named.py`, Jenkins hashlittle2 of the upper-case backslash path; worth moving into tools/ if used again): `Blizzard_ActionBar\Shared\ActionButton.lua` `ActionButton_ApplyCooldown` calls `cooldown:SetCooldown()` while `isActive`, else `cooldown:Clear()`; pet bar uses `CooldownFrame_Set`.
+- Detection needs no cooldown numbers (they're secret in combat): hooks on the shared Cooldown metatable (`SetCooldown*` = start, `Clear` = end) + `OnCooldownDone` HookScript on marked squares. Own-clock run length > 1.75 s = real cooldown -> ding (GCD runs are 1.5 s). The square's identity (`action:GetActionTexture`, pet `GetPetActionInfo` texture) must match at start and end, so swapping spells / bar paging doesn't ding. Sound = SpellReady's auction bell, max one per 0.25 s.
+- Pick mode: insecure overlay Buttons (strata DIALOG) SetAllPoints on each visible square + banner with Done (Esc works); refused in combat and ends when combat starts. Marks are child frames of the bar buttons, so they're made/changed out of combat only (deferred to PLAYER_REGEN_ENABLED).
+- Unconfirmed: that the hooks see Blizzard's calls on Forever and that OnCooldownDone fires with secret values. If nothing dings, have the user run `/p13 squares debug`, /reload, and read the WTF file.
 
 ## v0.31.31-36 (2026-11-28) - quest items marked in bags (works in Bagnon). TESTED IN GAME: works.
 User asked for a small, unobtrusive icon on quest items in the bags, toggleable in /p13.

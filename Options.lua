@@ -32,7 +32,7 @@ local LAYOUT = {
         { "Aggro range", { "aggroRange", "aggroBeep" } },
         { "Target range", { "rangeBeep", "rangeDot" } },
         { "Levelling", { "killsToLevel", "killTally" } },
-        { "Spells", { "spellReady", "skillLog", "skillBeacon", "ammoWarn" } },
+        { "Spells", { "spellReady", "slotReady", "slotReadyMarks", "skillLog", "skillBeacon", "ammoWarn" } },
         { "Group", { "taggedMarks" } },
     } },
     { name = "Quests", icon = "Interface\\Icons\\INV_Scroll_03", sections = {
